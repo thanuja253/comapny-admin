@@ -3,7 +3,6 @@ import {
   Body,
   Controller,
   Get,
-  Header,
   Post,
   Query,
   Request,
@@ -14,7 +13,6 @@ import {
 import { ValidationError } from 'class-validator';
 import { CompanyAuthService } from './company-auth.service';
 import { RegisterDto } from './dto/register.dto';
-import { RegisterThroughFacilitatorDto } from './dto/register-through-facilitator.dto';
 import { LoginDto } from './dto/login.dto';
 import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
@@ -55,32 +53,12 @@ export class CompanyAuthController {
     return this.companyAuthService.register(registerDto);
   }
 
-  @Post('register-through-facilitator')
-  @UsePipes(
-    new ValidationPipe({
-      transform: true,
-      whitelist: true,
-      exceptionFactory: (validationErrors: ValidationError[] = []) => {
-        const errors: Record<string, string[]> = {};
-        validationErrors.forEach((error) => {
-          if (error.constraints) {
-            errors[error.property] = Object.values(error.constraints);
-          }
-        });
-        return new BadRequestException({
-          status: 'error',
-          message: 'Validation failed',
-          errors,
-        });
-      },
-    }),
-  )
-  async registerThroughFacilitator(@Body() registerDto: RegisterThroughFacilitatorDto) {
-    return this.companyAuthService.registerThroughFacilitator(registerDto);
-  }
-
+  /**
+   * GET /api/company/auth/register
+   * Returns registration master data for frontend form load on the same route path.
+   */
   @Get('register')
-  async getRegisterInfo() {
+  async getRegisterMasters() {
     const masters = await this.registrationMastersService.getRegistrationMasters();
     return {
       status: 'success',
@@ -162,72 +140,27 @@ export class CompanyAuthController {
     return this.companyAuthService.getCurrentUser(req.user.userId);
   }
 
-  @Get([
-    'companies-list',
-    'submitted-companies',
-    'submitted_companies',
-    'submitted-company',
-    'submitted_company',
-    'registered-companies',
-    'registered_companies',
-    'registered-company',
-    'registered_company',
-    'registerd-companies',
-    'registerd_companies',
-    'registerd-company',
-    'registerd_company',
-  ])
-  @Header('Cache-Control', 'no-store, no-cache, must-revalidate, private')
-  @Header('Pragma', 'no-cache')
-  @Header('Expires', '0')
-  async getCompaniesList(
-    @Query() query?: Record<string, any>,
-  ) {
-    return this.companyAuthService.getCompaniesList(query);
+  @Get('companies-list')
+  async getCompaniesList(@Query('name') name?: string) {
+    return this.companyAuthService.getCompaniesList(name);
   }
 
-  @Post([
-    'companies-list',
-    'submitted-companies',
-    'submitted_companies',
-    'submitted-company',
-    'submitted_company',
-    'registered-companies',
-    'registered_companies',
-    'registered-company',
-    'registered_company',
-    'registerd-companies',
-    'registerd_companies',
-    'registerd-company',
-    'registerd_company',
-  ])
-  @Header('Cache-Control', 'no-store, no-cache, must-revalidate, private')
-  @Header('Pragma', 'no-cache')
-  @Header('Expires', '0')
-  async postCompaniesList(
-    @Body() body?: Record<string, any>,
-  ) {
-    return this.companyAuthService.getCompaniesList(body || {});
+  /**
+   * GET /api/company/auth/register-info
+   * Auth namespace endpoint for registration masters.
+   */
+  @Get('register-info')
+  async getRegisterInfo() {
+    return this.registrationMastersService.getRegistrationMasters();
   }
 
-  @Get('companies-filters')
-  async getCompanyFilterOptions() {
-    return this.companyAuthService.getCompanyListFilters();
-  }
-
-  @Post('companies-filters')
-  async postCompanyFilterOptions() {
-    return this.companyAuthService.getCompanyListFilters();
-  }
-
-  @Get(['status_change', 'company-status', 'update-status', 'account-status'])
-  async getLegacyStatusChange(@Query() query?: Record<string, any>) {
-    return this.companyAuthService.updateCompanyStatus(query || {});
-  }
-
-  @Post(['status_change', 'company-status', 'update-status', 'account-status'])
-  async postLegacyStatusChange(@Body() body?: Record<string, any>) {
-    return this.companyAuthService.updateCompanyStatus(body || {});
+  /**
+   * GET /api/company/auth/registration-info
+   * Alias endpoint for frontend consistency.
+   */
+  @Get('registration-info')
+  async getRegistrationInfo() {
+    return this.registrationMastersService.getRegistrationMasters();
   }
 }
 
