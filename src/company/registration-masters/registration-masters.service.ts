@@ -1,6 +1,4 @@
-import {
-  Injectable,
-} from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { Industry, IndustryDocument } from '../schemas/industry.schema';
@@ -8,11 +6,47 @@ import { Entity, EntityDocument } from '../schemas/entity.schema';
 import { Sector, SectorDocument } from '../schemas/sector.schema';
 import { State, StateDocument } from '../schemas/state.schema';
 import { Facilitator, FacilitatorDocument } from '../schemas/facilitator.schema';
+import { Assessor, AssessorDocument } from '../schemas/assessor.schema';
 import { AssessorGrade, AssessorGradeDocument } from '../schemas/assessor-grade.schema';
-import { CreateIndustryDto } from './dto/create-industry.dto';
-import { CreateStateDto } from './dto/create-state.dto';
-import { CreateAssessorGradeDto } from './dto/create-assessor-grade.dto';
-import { lookupIfscDetails } from '../../common/ifsc-lookup.util';
+
+const INDIA_STATES_MASTER: Array<{ code: string; name: string }> = [
+  { code: 'AN', name: 'Andaman and Nicobar Islands' },
+  { code: 'AP', name: 'Andhra Pradesh' },
+  { code: 'AR', name: 'Arunachal Pradesh' },
+  { code: 'AS', name: 'Assam' },
+  { code: 'BR', name: 'Bihar' },
+  { code: 'CH', name: 'Chandigarh' },
+  { code: 'CT', name: 'Chhattisgarh' },
+  { code: 'DN', name: 'Dadra and Nagar Haveli and Daman and Diu' },
+  { code: 'DL', name: 'Delhi' },
+  { code: 'GA', name: 'Goa' },
+  { code: 'GJ', name: 'Gujarat' },
+  { code: 'HR', name: 'Haryana' },
+  { code: 'HP', name: 'Himachal Pradesh' },
+  { code: 'JK', name: 'Jammu and Kashmir' },
+  { code: 'JH', name: 'Jharkhand' },
+  { code: 'KA', name: 'Karnataka' },
+  { code: 'KL', name: 'Kerala' },
+  { code: 'LA', name: 'Ladakh' },
+  { code: 'LD', name: 'Lakshadweep' },
+  { code: 'MP', name: 'Madhya Pradesh' },
+  { code: 'MH', name: 'Maharashtra' },
+  { code: 'MN', name: 'Manipur' },
+  { code: 'ML', name: 'Meghalaya' },
+  { code: 'MZ', name: 'Mizoram' },
+  { code: 'NL', name: 'Nagaland' },
+  { code: 'OR', name: 'Odisha' },
+  { code: 'PY', name: 'Puducherry' },
+  { code: 'PB', name: 'Punjab' },
+  { code: 'RJ', name: 'Rajasthan' },
+  { code: 'SK', name: 'Sikkim' },
+  { code: 'TN', name: 'Tamil Nadu' },
+  { code: 'TG', name: 'Telangana' },
+  { code: 'TR', name: 'Tripura' },
+  { code: 'UP', name: 'Uttar Pradesh' },
+  { code: 'UT', name: 'Uttarakhand' },
+  { code: 'WB', name: 'West Bengal' },
+];
 
 @Injectable()
 export class RegistrationMastersService {
@@ -27,26 +61,11 @@ export class RegistrationMastersService {
     private readonly stateModel: Model<StateDocument>,
     @InjectModel(Facilitator.name)
     private readonly facilitatorModel: Model<FacilitatorDocument>,
+    @InjectModel(Assessor.name)
+    private readonly assessorModel: Model<AssessorDocument>,
     @InjectModel(AssessorGrade.name)
     private readonly assessorGradeModel: Model<AssessorGradeDocument>,
   ) {}
-
-  async getBankDetailsByIfsc(rawIfsc: string) {
-    const result = await lookupIfscDetails(rawIfsc);
-    return {
-      status: 'success',
-      message: 'Bank details fetched successfully',
-      data: {
-        ifsc_code: result.ifsc_code,
-        bank_name: result.bank_name,
-        branch_name: result.branch_name,
-        address: result.address,
-        city: result.city,
-        district: result.district,
-        state: result.state,
-      },
-    };
-  }
 
   async getRegistrationMasters(): Promise<{
     status: 'success';
@@ -56,20 +75,13 @@ export class RegistrationMastersService {
       entities: Array<{ id: string; name: string }>;
       sectors: Array<{ id: string; name: string; group_name?: string }>;
       states: Array<{ id: string; name: string; code?: string }>;
-      facilitators: Array<{
-        id: string;
-        name: string;
-        code?: string;
-        consultant_id?: string;
-        facilitator_name?: string;
-        facilitator_code?: string;
-      }>;
+      facilitators: Array<{ id: string; name: string }>;
     };
   }> {
     try {
       console.log('[RegistrationMasters] Fetching master data...');
       // Fetch all data - try with status filter first, fallback to all if empty
-      const [industriesFiltered, entitiesFiltered, statesFiltered, facilitatorsFiltered] =
+      const [industriesFiltered, entitiesFiltered, sectors, statesFiltered, facilitatorsFiltered] =
         await Promise.all([
           // Industries: try status = 1 or "1" or missing
           this.industryModel
@@ -95,6 +107,12 @@ export class RegistrationMastersService {
             .sort({ name: 1 })
             .select('_id name')
             .lean(),
+          // Sectors: no status field, return all (include group_name for GROUP / SECTOR UI)
+          this.sectorModel
+            .find({})
+            .sort({ group_name: 1, name: 1 })
+            .select('_id name group_name')
+            .lean(),
           // States: same as industries/entities
           this.stateModel
             .find({
@@ -117,7 +135,7 @@ export class RegistrationMastersService {
               ],
             })
             .sort({ name: 1 })
-            .select('_id name consultant_id')
+            .select('_id name')
             .lean(),
         ]);
 
@@ -136,12 +154,12 @@ export class RegistrationMastersService {
       
       const facilitators = facilitatorsFiltered.length > 0
         ? facilitatorsFiltered
-        : await this.facilitatorModel.find({}).sort({ name: 1 }).select('_id name consultant_id').lean();
+        : await this.facilitatorModel.find({}).sort({ name: 1 }).select('_id name').lean();
 
       console.log('[RegistrationMasters] Results:', {
         industries: industries.length,
         entities: entities.length,
-        sectors: 0,
+        sectors: sectors.length,
         states: states.length,
         facilitators: facilitators.length,
       });
@@ -158,7 +176,11 @@ export class RegistrationMastersService {
             id: e._id.toString(),
             name: e.name,
           })),
-          sectors: [],
+          sectors: sectors.map((s: any) => ({
+            id: s._id.toString(),
+            name: s.name,
+            group_name: s.group_name || '',
+          })),
           states: states.map((s: any) => ({
             id: s._id.toString(),
             name: s.name,
@@ -167,10 +189,6 @@ export class RegistrationMastersService {
           facilitators: facilitators.map((f: any) => ({
             id: f._id.toString(),
             name: f.name,
-            code: String(f.consultant_id || '').trim() || undefined,
-            consultant_id: String(f.consultant_id || '').trim() || undefined,
-            facilitator_name: String(f.name || '').trim() || undefined,
-            facilitator_code: String(f.consultant_id || '').trim() || undefined,
           })),
         },
       };
@@ -215,14 +233,79 @@ export class RegistrationMastersService {
       statesFiltered.length > 0
         ? statesFiltered
         : await this.stateModel.find({}).sort({ name: 1 }).select('_id name code').lean();
+
+    // Build a map from DB first so DB entries override master list details.
+    const byCodeOrName = new Map<string, { id: string; name: string; code?: string }>();
+    for (const s of states as any[]) {
+      const entry = {
+        id: s._id.toString(),
+        name: s.name,
+        code: s.code || undefined,
+      };
+      if (entry.code) byCodeOrName.set(`code:${entry.code}`, entry);
+      byCodeOrName.set(`name:${entry.name.toLowerCase()}`, entry);
+    }
+
+    // Ensure full Indian list is available even if DB has only a few states.
+    for (const s of INDIA_STATES_MASTER) {
+      const byCode = byCodeOrName.get(`code:${s.code}`);
+      const byName = byCodeOrName.get(`name:${s.name.toLowerCase()}`);
+      if (!byCode && !byName) {
+        byCodeOrName.set(`code:${s.code}`, {
+          id: s.code,
+          name: s.name,
+          code: s.code,
+        });
+      }
+    }
+
+    const dedup = new Map<string, { id: string; name: string; code?: string }>();
+    for (const v of byCodeOrName.values()) {
+      const key = (v.code || v.name).toLowerCase();
+      if (!dedup.has(key)) dedup.set(key, v);
+    }
+    const fullStates = [...dedup.values()].sort((a, b) => a.name.localeCompare(b.name));
+
     return {
       status: 'success',
       message: 'States loaded',
       data: {
-        states: (states as any[]).map((s) => ({
-          id: s._id.toString(),
-          name: s.name,
-          code: s.code || undefined,
+        states: fullStates,
+      },
+    };
+  }
+
+  /**
+   * Get all categories (industry categories) for dropdowns.
+   */
+  async getAllCategories(): Promise<{
+    status: 'success';
+    message: string;
+    data: { categories: Array<{ id: string; name: string }> };
+  }> {
+    const industriesFiltered = await this.industryModel
+      .find({
+        $or: [
+          { status: 1 },
+          { status: '1' },
+          { status: { $exists: false } },
+        ],
+      })
+      .sort({ name: 1 })
+      .select('_id name')
+      .lean();
+    const industries =
+      industriesFiltered.length > 0
+        ? industriesFiltered
+        : await this.industryModel.find({}).sort({ name: 1 }).select('_id name').lean();
+
+    return {
+      status: 'success',
+      message: 'Categories loaded',
+      data: {
+        categories: (industries as any[]).map((i) => ({
+          id: i._id.toString(),
+          name: i.name,
         })),
       },
     };
@@ -246,41 +329,13 @@ export class RegistrationMastersService {
       name: s.name,
       group_name: s.group_name || '',
     }));
-    const groups = [...new Set(sectorList.map((s) => s.group_name).filter(Boolean))].sort();
+    const groups = [...new Set(sectorList.map((s) => s.group_name).filter(Boolean))].sort(
+      (a, b) => a.localeCompare(b),
+    );
     return {
       status: 'success',
       message: 'Groups and sectors',
       data: { groups, sectors: sectorList },
-    };
-  }
-
-  /**
-   * Get active sectors only (for Registration form "Type of Sector" dropdown).
-   * Excludes inactive sectors (status = 0).
-   */
-  async getActiveSectors(): Promise<{
-    status: 'success';
-    message: string;
-    data: { sectors: Array<{ id: string; name: string; group_name?: string }> };
-  }> {
-    const sectors = await this.sectorModel
-      .find({
-        $or: [{ status: 1 }, { status: '1' }, { status: { $exists: false } }],
-      })
-      .sort({ name: 1 })
-      .select('_id name group_name')
-      .lean();
-
-    return {
-      status: 'success',
-      message: 'Active sectors loaded',
-      data: {
-        sectors: (sectors as any[]).map((s) => ({
-          id: s._id.toString(),
-          name: s.name,
-          group_name: s.group_name || '',
-        })),
-      },
     };
   }
 
@@ -311,272 +366,88 @@ export class RegistrationMastersService {
     };
   }
 
-  async getAllAssessorGrades() {
-    const grades = await this.assessorGradeModel.find({}).sort({ name: 1 }).lean();
-    return {
-      status: 'success',
-      message: 'Assessor grades loaded',
-      data: {
-        grades: (grades as any[]).map((g) => ({
-          id: g._id.toString(),
-          name: g.name,
-          status: g.status ?? 1,
-        })),
-      },
-    };
-  }
+  /**
+   * Get assessor grades for dropdown.
+   * Reads from DB only (master grade collection if present, else assessor records).
+   */
+  async getAssessorGrades(): Promise<{
+    status: 'success';
+    message: string;
+    data: { grades: Array<{ id: string; name: string }> };
+  }> {
+    const gradesMap = new Map<string, { id: string; name: string }>();
 
-  async getActiveAssessorGrades() {
-    const active = await this.assessorGradeModel
+    const normalize = (v: unknown): string => {
+      if (typeof v === 'string') return v.trim();
+      if (typeof v === 'number' || typeof v === 'boolean') return String(v).trim();
+      if (v && typeof v === 'object' && typeof (v as any).toString === 'function') {
+        const s = (v as any).toString().trim();
+        if (s && s !== '[object Object]') return s;
+      }
+      return '';
+    };
+
+    const tryAdd = (rawId: unknown, rawName: unknown) => {
+      const name = normalize(rawName);
+      if (!name) return;
+      const id = normalize(rawId) || name;
+      const key = name.toLowerCase();
+      if (!gradesMap.has(key)) gradesMap.set(key, { id, name });
+    };
+
+    // 1) Preferred: assessor_grades master collection.
+    let masterGrades = await this.assessorGradeModel
       .find({
         $or: [{ status: 1 }, { status: '1' }, { status: { $exists: false } }],
       })
-      .sort({ name: 1 })
+      .sort({ order: 1, name: 1 })
+      .select('_id name')
       .lean();
-    const grades =
-      active.length > 0
-        ? active
-        : await this.assessorGradeModel.find({}).sort({ name: 1 }).lean();
+
+    // Auto-seed once when collection is empty so dropdown has DB-backed values.
+    if (masterGrades.length === 0) {
+      const defaults = (process.env.ASSESSOR_GRADES_DEFAULT ||
+        'Junior Assessor,Senior Assessor,Lead Assessor')
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean);
+      if (defaults.length > 0) {
+        await this.assessorGradeModel.insertMany(
+          defaults.map((name, index) => ({ name, status: '1', order: index + 1 })),
+          { ordered: false },
+        );
+      }
+      masterGrades = await this.assessorGradeModel
+        .find({
+          $or: [{ status: 1 }, { status: '1' }, { status: { $exists: false } }],
+        })
+        .sort({ order: 1, name: 1 })
+        .select('_id name')
+        .lean();
+    }
+
+    for (const d of masterGrades as any[]) {
+      tryAdd(d._id, d.name);
+    }
+
+    // 2) Fallback: distinct values from assessor records.
+    if (gradesMap.size === 0) {
+      const fieldCandidates = ['assessor_grade', 'grade'];
+      for (const field of fieldCandidates) {
+        const values = await this.assessorModel.distinct(field, {
+          [field]: { $exists: true, $nin: [null, ''] },
+        } as any);
+        for (const v of values) {
+          tryAdd(v, v);
+        }
+      }
+    }
+
+    const grades = [...gradesMap.values()].sort((a, b) => a.name.localeCompare(b.name));
     return {
       status: 'success',
       message: 'Assessor grades loaded',
-      data: {
-        grades: (grades as any[]).map((g) => ({
-          id: g._id.toString(),
-          name: g.name,
-          status: g.status ?? 1,
-        })),
-      },
-    };
-  }
-
-  async createAssessorGrade(dto: CreateAssessorGradeDto) {
-    const name = dto.name.trim().toUpperCase();
-    const existing = await this.assessorGradeModel.findOne({ name }).lean();
-    if (existing) {
-      return {
-        status: 'success',
-        message: 'Assessor grade already exists',
-        data: {
-          id: (existing as any)._id.toString(),
-          name: (existing as any).name,
-          status: (existing as any).status ?? 1,
-        },
-      };
-    }
-    const grade = await this.assessorGradeModel.create({
-      name,
-      status: dto.status ?? 1,
-    });
-    return {
-      status: 'success',
-      message: 'Assessor grade created successfully',
-      data: {
-        id: grade._id.toString(),
-        name: grade.name,
-        status: grade.status,
-      },
-    };
-  }
-
-  async createAssessorGradesBulk(items: CreateAssessorGradeDto[]) {
-    const inserted: any[] = [];
-    const skipped: string[] = [];
-    for (const item of items || []) {
-      const name = (item.name || '').trim().toUpperCase();
-      if (!name) continue;
-      const existing = await this.assessorGradeModel.findOne({ name }).lean();
-      if (existing) {
-        skipped.push(name);
-        continue;
-      }
-      const row = await this.assessorGradeModel.create({
-        name,
-        status: item.status ?? 1,
-      });
-      inserted.push({
-        id: row._id.toString(),
-        name: row.name,
-        status: row.status,
-      });
-    }
-    return {
-      status: 'success',
-      message: 'Assessor grades bulk processed',
-      data: {
-        inserted_count: inserted.length,
-        skipped_count: skipped.length,
-        inserted,
-        skipped,
-      },
-    };
-  }
-
-  async getAllIndustries() {
-    const industries = await this.industryModel.find({}).sort({ name: 1 }).lean();
-    return {
-      status: 'success',
-      message: 'Industries loaded',
-      data: {
-        industries: (industries as any[]).map((i) => ({
-          id: i._id.toString(),
-          name: i.name,
-          status: i.status ?? 1,
-        })),
-      },
-    };
-  }
-
-  async createIndustry(dto: CreateIndustryDto) {
-    const name = dto.name.trim();
-    const existing = await this.industryModel.findOne({ name: new RegExp(`^${name}$`, 'i') }).lean();
-    if (existing) {
-      return {
-        status: 'success',
-        message: 'Industry already exists',
-        data: {
-          id: (existing as any)._id.toString(),
-          name: (existing as any).name,
-          status: (existing as any).status ?? 1,
-        },
-      };
-    }
-
-    const industry = await this.industryModel.create({
-      name,
-      status: dto.status ?? 1,
-    });
-
-    return {
-      status: 'success',
-      message: 'Industry created successfully',
-      data: {
-        id: industry._id.toString(),
-        name: industry.name,
-        status: industry.status,
-      },
-    };
-  }
-
-  async createIndustriesBulk(items: CreateIndustryDto[]) {
-    const inserted: any[] = [];
-    const skipped: string[] = [];
-
-    for (const item of items || []) {
-      const name = (item.name || '').trim();
-      if (!name) continue;
-      const existing = await this.industryModel.findOne({ name: new RegExp(`^${name}$`, 'i') }).lean();
-      if (existing) {
-        skipped.push(name);
-        continue;
-      }
-      const row = await this.industryModel.create({
-        name,
-        status: item.status ?? 1,
-      });
-      inserted.push({
-        id: row._id.toString(),
-        name: row.name,
-        status: row.status,
-      });
-    }
-
-    return {
-      status: 'success',
-      message: 'Industries bulk processed',
-      data: {
-        inserted_count: inserted.length,
-        skipped_count: skipped.length,
-        inserted,
-        skipped,
-      },
-    };
-  }
-
-  async getAllStatesMaster() {
-    const states = await this.stateModel.find({}).sort({ name: 1 }).lean();
-    return {
-      status: 'success',
-      message: 'States loaded',
-      data: {
-        states: (states as any[]).map((s) => ({
-          id: s._id.toString(),
-          name: s.name,
-          code: s.code || '',
-          status: s.status ?? 1,
-        })),
-      },
-    };
-  }
-
-  async createState(dto: CreateStateDto) {
-    const name = dto.name.trim();
-    const existing = await this.stateModel.findOne({ name: new RegExp(`^${name}$`, 'i') }).lean();
-    if (existing) {
-      return {
-        status: 'success',
-        message: 'State already exists',
-        data: {
-          id: (existing as any)._id.toString(),
-          name: (existing as any).name,
-          code: (existing as any).code || '',
-          status: (existing as any).status ?? 1,
-        },
-      };
-    }
-
-    const state = await this.stateModel.create({
-      name,
-      code: dto.code?.trim() || undefined,
-      status: dto.status ?? 1,
-    });
-
-    return {
-      status: 'success',
-      message: 'State created successfully',
-      data: {
-        id: state._id.toString(),
-        name: state.name,
-        code: state.code || '',
-        status: state.status,
-      },
-    };
-  }
-
-  async createStatesBulk(items: CreateStateDto[]) {
-    const inserted: any[] = [];
-    const skipped: string[] = [];
-
-    for (const item of items || []) {
-      const name = (item.name || '').trim();
-      if (!name) continue;
-      const existing = await this.stateModel.findOne({ name: new RegExp(`^${name}$`, 'i') }).lean();
-      if (existing) {
-        skipped.push(name);
-        continue;
-      }
-      const row = await this.stateModel.create({
-        name,
-        code: item.code?.trim() || undefined,
-        status: item.status ?? 1,
-      });
-      inserted.push({
-        id: row._id.toString(),
-        name: row.name,
-        code: row.code || '',
-        status: row.status,
-      });
-    }
-
-    return {
-      status: 'success',
-      message: 'States bulk processed',
-      data: {
-        inserted_count: inserted.length,
-        skipped_count: skipped.length,
-        inserted,
-        skipped,
-      },
+      data: { grades },
     };
   }
 }

@@ -3,14 +3,16 @@ import { Document } from 'mongoose';
 
 export type AssessorGradeDocument = AssessorGrade & Document;
 
-@Schema({ timestamps: true })
+@Schema({ timestamps: true, collection: 'assessor_grades' })
 export class AssessorGrade {
-  @Prop({ required: true, unique: true, trim: true, uppercase: true })
+  @Prop({ required: true, trim: true })
   name: string;
 
-  @Prop({ default: 1 })
-  status: number;
+  @Prop({ default: '1' })
+  status: string;
+
+  @Prop({ default: 0 })
+  order: number;
 }
 
 export const AssessorGradeSchema = SchemaFactory.createForClass(AssessorGrade);
-

@@ -1,4 +1,4 @@
-import { Controller, Get, Param } from '@nestjs/common';
+import { Controller, Get } from '@nestjs/common';
 import { RegistrationMastersService } from './registration-masters.service';
 
 @Controller('api/company')
@@ -33,14 +33,12 @@ export class RegistrationMastersController {
   }
 
   /**
-   * GET /api/company/all-states
-   * Returns complete states master list (including inactive).
+   * GET /api/company/categories
+   * Returns industry categories for dropdowns.
    */
-  @Get('all-states')
-  @Get('states-all')
-  @Get('states_all')
-  async getAllStatesUnfiltered() {
-    return this.registrationMastersService.getAllStatesMaster();
+  @Get('categories')
+  async getAllCategories() {
+    return this.registrationMastersService.getAllCategories();
   }
 
   /**
@@ -50,15 +48,6 @@ export class RegistrationMastersController {
   @Get('groups-sectors')
   async getGroupsAndSectors() {
     return this.registrationMastersService.getGroupsAndSectors();
-  }
-
-  /**
-   * GET /api/company/sectors
-   * Returns active sectors only (status = 1) for Registration form dropdown.
-   */
-  @Get('sectors')
-  async getActiveSectors() {
-    return this.registrationMastersService.getActiveSectors();
   }
 
   /**
@@ -72,22 +61,12 @@ export class RegistrationMastersController {
 
   /**
    * GET /api/company/assessor-grades
-   * Returns active assessor grades for frontend dropdown.
+   * Returns assessor grades for dropdown (DB-backed).
    */
   @Get('assessor-grades')
   async getAssessorGrades() {
-    return this.registrationMastersService.getActiveAssessorGrades();
+    return this.registrationMastersService.getAssessorGrades();
   }
-
-  /**
-   * GET /api/company/ifsc/:ifsc
-   * Returns bank and branch details for a valid IFSC.
-   */
-  @Get('ifsc/:ifsc')
-  async getBankDetailsByIfsc(@Param('ifsc') ifsc: string) {
-    return this.registrationMastersService.getBankDetailsByIfsc(ifsc);
-  }
-
 }
 
 

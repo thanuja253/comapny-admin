@@ -1,85 +1,34 @@
 import { Injectable } from '@nestjs/common';
 import * as nodemailer from 'nodemailer';
-import * as dotenv from 'dotenv';
-
-type MailPayload = {
-  from?: string;
-  to: string;
-  subject: string;
-  html: string;
-};
 
 @Injectable()
 export class MailService {
-  private readonly transporter: { sendMail: (mailOptions: MailPayload) => Promise<void> };
-  private readonly mailProvider: string;
-  private readonly resendApiKey: string;
-  private readonly smtpTransporter?: nodemailer.Transporter;
+  private transporter: nodemailer.Transporter;
 
   constructor() {
-    // Ensure .env values are available regardless of provider init order.
-    dotenv.config({ path: '.env' });
-    this.mailProvider = (process.env.MAIL_PROVIDER || 'resend').toLowerCase();
-    this.resendApiKey = (process.env.RESEND_API_KEY || '').trim();
-
-    if (this.mailProvider === 'smtp') {
-      const host = (process.env.SMTP_SERVER_HOST || '').trim();
-      const port = Number(process.env.SMTP_SERVER_PORT || 587);
-      const secure = String(process.env.SMTP_SERVER_SECURE || 'false').toLowerCase() === 'true';
-      const service = (process.env.SMTP_SERVER_SERVICE || '').trim();
-      const user = (process.env.SMTP_SERVER_USER || '').trim();
-      const pass = (process.env.SMTP_SERVER_PASS || '').trim();
-
-      if (!host && !service) {
-        console.warn('[MailService] SMTP selected but host/service is missing. Falling back to resend.');
-      } else if (!user || !pass) {
-        console.warn('[MailService] SMTP selected but user/pass missing. Falling back to resend.');
-      } else {
-        const smtpTimeoutMs = this.getOutboundMailTimeoutMs();
-        this.smtpTransporter = nodemailer.createTransport({
-          ...(service ? { service } : { host, port, secure }),
-          auth: { user, pass },
-          connectionTimeout: smtpTimeoutMs,
-          greetingTimeout: smtpTimeoutMs,
-          socketTimeout: smtpTimeoutMs,
-        });
-
-        this.transporter = {
-          sendMail: async (mailOptions: MailPayload): Promise<void> => {
-            await this.smtpTransporter!.sendMail({
-              from: mailOptions.from || process.env.MAIL_FROM_ADDRESS || user,
-              to: mailOptions.to,
-              subject: mailOptions.subject,
-              html: mailOptions.html,
-            });
-          },
-        };
-
-        const verifyOnStart =
-          String(process.env.MAIL_SMTP_VERIFY_ON_START || 'false').toLowerCase() === 'true';
-        if (verifyOnStart) {
-          this.smtpTransporter
-            .verify()
-            .then(() => console.log('[MailService] SMTP connection verified successfully.'))
-            .catch((err) => this.logSmtpErrorContext(err, user));
-        }
-        return;
-      }
-    }
-
-    // Default/fallback provider is Resend.
-    this.transporter = {
-      sendMail: async (mailOptions: MailPayload): Promise<void> => {
-        await this.sendViaResend(mailOptions);
+    this.transporter = nodemailer.createTransport({
+      host: process.env.MAIL_HOST || 'smtp.gmail.com',
+      port: parseInt(process.env.MAIL_PORT || '587'),
+      secure: false,
+      auth: {
+        user: process.env.MAIL_USERNAME,
+        pass: process.env.MAIL_PASSWORD,
       },
-    };
+      connectionTimeout: 10000, // 10 seconds
+      greetingTimeout: 10000, // 10 seconds
+      socketTimeout: 10000, // 10 seconds
+    });
 
-    if (this.mailProvider !== 'resend') {
-      console.warn(`[MailService] MAIL_PROVIDER=${this.mailProvider} not usable. Using resend fallback.`);
-    }
-    if (!this.resendApiKey) {
-      console.warn('[MailService] RESEND_API_KEY is missing. Email sending will fail until this environment variable is set.');
-    }
+    // Log basic transporter verification on startup so you can see immediately
+    // if SMTP credentials or host/port are wrong.
+    this.transporter
+      .verify()
+      .then(() => {
+        console.log('[MailService] SMTP connection verified successfully.');
+      })
+      .catch((err) => {
+        console.error('[MailService] SMTP connection verification failed:', err);
+      });
   }
 
   async sendCompanyRegistrationEmail(
@@ -142,7 +91,6 @@ export class MailService {
                     <td align="center" style="border-radius:12px;background:#6DC041;">
                       <a href="${loginUrl}" target="_blank" style="display:inline-block;padding:14px 32px;font-size:14px;font-weight:600;color:#FFFFFF;text-decoration:none;">Get started</a>
                     </td>
-                    
                   </tr>
                 </table>
                 <p style="margin:0;text-align:center;color:#3A973D;font-size:11px;opacity:0.8;">Or copy this link: <a href="${loginUrl}" style="color:#6DC041;text-decoration:none;word-break:break-all;">${loginUrl}</a></p>
@@ -176,244 +124,6 @@ export class MailService {
     }
   }
 
-  /** Same URL as assessor invite credentials (`ASSESSOR_LOGIN_URL` or `FRONTEND_URL/assessor/login`). */
-  private getAssessorPortalLoginUrl(): string {
-    const base = (process.env.FRONTEND_URL || 'http://localhost:3000').replace(/\/$/, '');
-    return (
-      (process.env.ASSESSOR_LOGIN_URL || '').trim() ||
-      `${base}/assessor/login`
-    );
-  }
-
-  private getFacilitatorPortalLoginUrl(): string {
-    const base = (process.env.FRONTEND_URL || 'http://localhost:3000').replace(/\/$/, '');
-    return (
-      (process.env.FACILITATOR_LOGIN_URL || '').trim() ||
-      `${base}/facilitator/login`
-    );
-  }
-
-  async sendAssessorCredentialsEmail(
-    email: string,
-    assessorName: string,
-    temporaryPassword: string,
-  ): Promise<void> {
-    const loginUrl = this.getAssessorPortalLoginUrl();
-    const mailOptions = {
-      from: process.env.MAIL_FROM_ADDRESS || 'noreply@greenco.com',
-      to: email,
-      subject: 'GreenCo - Assessor account credentials',
-      html: `
-        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-          <h2>Welcome to GreenCo</h2>
-          <p>Dear ${assessorName || 'Assessor'},</p>
-          <p>Your assessor account has been created by GreenCo Admin.</p>
-          <p><strong>Login Email:</strong> ${email}</p>
-          <p><strong>Temporary Password:</strong> ${temporaryPassword}</p>
-          <p>Please sign in and change your password after first login.</p>
-          <p><a href="${loginUrl}" target="_blank">Login to Assessor Portal</a></p>
-          <p>If the button does not open, use this URL: ${loginUrl}</p>
-          <p>Best regards,<br/>GreenCo Team</p>
-        </div>
-      `,
-    };
-    try {
-      await this.transporter.sendMail(mailOptions);
-    } catch (err) {
-      this.logSmtpErrorContext(err, email);
-      throw err;
-    }
-  }
-
-  private getOutboundMailTimeoutMs(): number {
-    return Math.max(
-      5000,
-      Number.parseInt(process.env.MAIL_SMTP_TIMEOUT_MS || '25000', 10) || 25000,
-    );
-  }
-
-  private async sendViaResend(mailOptions: MailPayload): Promise<void> {
-    if (!this.resendApiKey) {
-      throw new Error('RESEND_API_KEY is not configured.');
-    }
-
-    const timeoutMs = this.getOutboundMailTimeoutMs();
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
-
-    let response: Response;
-    try {
-      response = await fetch('https://api.resend.com/emails', {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${this.resendApiKey}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          from: mailOptions.from || process.env.MAIL_FROM_ADDRESS || 'noreply@greenco.com',
-          to: [mailOptions.to],
-          subject: mailOptions.subject,
-          html: mailOptions.html,
-        }),
-        signal: controller.signal,
-      });
-    } catch (e) {
-      if ((e as Error)?.name === 'AbortError') {
-        throw new Error(`Resend request timed out after ${timeoutMs}ms`);
-      }
-      throw e;
-    } finally {
-      clearTimeout(timer);
-    }
-
-    if (!response.ok) {
-      const responseText = await response.text();
-      throw new Error(`Resend API error ${response.status}: ${responseText}`);
-    }
-  }
-
-  private logSmtpErrorContext(error: unknown, recipient: string): void {
-    const err = error as NodeJS.ErrnoException & { responseCode?: number; command?: string };
-    const code = err?.code || 'UNKNOWN';
-    const message = err?.message || 'Unknown email provider error';
-    const responseCode = err?.responseCode ? ` responseCode=${err.responseCode}` : '';
-    const command = err?.command ? ` command=${err.command}` : '';
-
-    console.error(
-      `[MailService] Email send failed for provider=${this.mailProvider} recipient=${recipient} code=${code}${responseCode}${command} message="${message}"`,
-    );
-
-    if (code === 'ETIMEDOUT' || code === 'ESOCKET' || code === 'EHOSTUNREACH' || code === 'ECONNREFUSED') {
-      console.error(
-        '[MailService] Outbound network issue detected while sending email.',
-      );
-    }
-  }
-
-  /**
-   * Assessor forgot-password: same layout and login link as {@link sendAssessorCredentialsEmail}.
-   */
-  async sendAssessorPasswordResetEmail(
-    email: string,
-    assessorName: string,
-    temporaryPassword: string,
-  ): Promise<void> {
-    const loginUrl = this.getAssessorPortalLoginUrl();
-    const mailOptions = {
-      from: process.env.MAIL_FROM_ADDRESS || 'noreply@greenco.com',
-      to: email,
-      subject: 'GreenCo - Assessor password reset',
-      html: `
-        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-          <h2>Welcome to GreenCo</h2>
-          <p>Dear ${assessorName || 'Assessor'},</p>
-          <p>Your assessor password has been reset by your request (or an administrator).</p>
-          <p><strong>Login Email:</strong> ${email}</p>
-          <p><strong>Temporary Password:</strong> ${temporaryPassword}</p>
-          <p>Please sign in and change your password after login.</p>
-          <p><a href="${loginUrl}" target="_blank">Login to Assessor Portal</a></p>
-          <p>If the button does not open, use this URL: ${loginUrl}</p>
-          <p>Best regards,<br/>GreenCo Team</p>
-        </div>
-      `,
-    };
-    try {
-      await this.transporter.sendMail(mailOptions);
-    } catch (err) {
-      this.logSmtpErrorContext(err, email);
-      throw err;
-    }
-  }
-
-  async sendFacilitatorPasswordResetEmail(
-    email: string,
-    facilitatorName: string,
-    temporaryPassword: string,
-  ): Promise<void> {
-    const loginUrl = this.getFacilitatorPortalLoginUrl();
-    const mailOptions = {
-      from: process.env.MAIL_FROM_ADDRESS || 'noreply@greenco.com',
-      to: email,
-      subject: 'GreenCo - Facilitator password reset',
-      html: `
-        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-          <h2>Welcome to GreenCo</h2>
-          <p>Dear ${facilitatorName || 'Facilitator'},</p>
-          <p>Your facilitator password has been reset by your request (or an administrator).</p>
-          <p><strong>Login Email:</strong> ${email}</p>
-          <p><strong>Temporary Password:</strong> ${temporaryPassword}</p>
-          <p>Please sign in and change your password after login.</p>
-          <p><a href="${loginUrl}" target="_blank">Login to Facilitator Portal</a></p>
-          <p>If the button does not open, use this URL: ${loginUrl}</p>
-          <p>Best regards,<br/>GreenCo Team</p>
-        </div>
-      `,
-    };
-    try {
-      await this.transporter.sendMail(mailOptions);
-    } catch (err) {
-      this.logSmtpErrorContext(err, email);
-      throw err;
-    }
-  }
-
-  async sendFacilitatorPasswordUpdateEmail(email: string, facilitatorName: string): Promise<void> {
-    const loginUrl = this.getFacilitatorPortalLoginUrl();
-    const mailOptions = {
-      from: process.env.MAIL_FROM_ADDRESS || 'noreply@greenco.com',
-      to: email,
-      subject: 'GreenCo - Facilitator password updated',
-      html: `
-        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-          <h2>Password Updated</h2>
-          <p>Hello ${facilitatorName || 'Facilitator'},</p>
-          <p>Your password has been updated successfully.</p>
-          <p><a href="${loginUrl}" target="_blank">Login to Facilitator Portal</a></p>
-          <p>If this was not done by you, please contact GreenCo support immediately.</p>
-          <p>Best regards,<br/>GreenCo Team</p>
-        </div>
-      `,
-    };
-    try {
-      await this.transporter.sendMail(mailOptions);
-    } catch (err) {
-      this.logSmtpErrorContext(err, email);
-      throw err;
-    }
-  }
-
-  async sendFacilitatorCredentialsEmail(
-    email: string,
-    facilitatorName: string,
-    temporaryPassword: string,
-  ): Promise<void> {
-    const loginUrl = this.getFacilitatorPortalLoginUrl();
-    const mailOptions = {
-      from: process.env.MAIL_FROM_ADDRESS || 'noreply@greenco.com',
-      to: email,
-      subject: 'GreenCo - Facilitator account credentials',
-      html: `
-        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-          <h2>Welcome to GreenCo</h2>
-          <p>Dear ${facilitatorName || 'Facilitator'},</p>
-          <p>Your facilitator account has been created by GreenCo Admin.</p>
-          <p><strong>Login Email:</strong> ${email}</p>
-          <p><strong>Temporary Password:</strong> ${temporaryPassword}</p>
-          <p>Please sign in and change your password after first login.</p>
-          <p><a href="${loginUrl}" target="_blank">Login to Facilitator Portal</a></p>
-          <p>If the button does not open, use this URL: ${loginUrl}</p>
-          <p>Best regards,<br/>GreenCo Team</p>
-        </div>
-      `,
-    };
-    try {
-      await this.transporter.sendMail(mailOptions);
-    } catch (err) {
-      this.logSmtpErrorContext(err, email);
-      throw err;
-    }
-  }
-
   async sendForgotPasswordEmail(email: string, password: string): Promise<void> {
     const loginUrl = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/company/login`;
     const brandName = 'Green Co';
@@ -422,6 +132,7 @@ export class MailService {
       from: process.env.MAIL_FROM_ADDRESS || 'noreply@greenco.com',
       to: email,
       subject: 'Green Co - Password Reset',
+      text: `Green Co Password Reset\n\nEmail: ${email}\nTemporary Password: ${password}\nLogin: ${loginUrl}\n\nIf you did not request this reset, contact support.`,
       html: `
 <!DOCTYPE html>
 <html>
@@ -500,11 +211,105 @@ export class MailService {
       `,
     };
 
-    try {
-      await this.transporter.sendMail(mailOptions);
-    } catch (err) {
-      this.logSmtpErrorContext(err, email);
-      throw err;
+    const info = await this.transporter.sendMail(mailOptions);
+    console.log('[MailService] Forgot password mail response:', {
+      to: email,
+      accepted: info.accepted,
+      rejected: info.rejected,
+      messageId: info.messageId,
+      response: info.response,
+    });
+    if (
+      Array.isArray(info.rejected) &&
+      info.rejected.map(String).includes(email)
+    ) {
+      throw new Error(`SMTP rejected recipient: ${email}`);
+    }
+  }
+
+  async sendAdminForgotPasswordEmail(
+    email: string,
+    password: string,
+  ): Promise<void> {
+    const loginUrl = `${
+      process.env.ADMIN_FRONTEND_URL || process.env.FRONTEND_URL || 'http://localhost:3002'
+    }/admin/login`;
+    const backupEmail = (process.env.ADMIN_FORGOT_PASSWORD_BACKUP_TO || '')
+      .trim()
+      .toLowerCase();
+
+    const mailOptions = {
+      from: process.env.MAIL_FROM_ADDRESS || 'noreply@greenco.com',
+      to: email,
+      ...(backupEmail && backupEmail !== email ? { cc: backupEmail } : {}),
+      subject: 'GreenCo Admin - Password Reset',
+      text: `GreenCo Admin Password Reset\n\nEmail: ${email}\nTemporary Password: ${password}\nLogin: ${loginUrl}\n\nIf you did not request this reset, contact support immediately.`,
+      html: `
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>GreenCo Admin Password Reset</title>
+  </head>
+  <body style="margin:0;padding:0;background:#f3f4f6;font-family:Arial,Helvetica,sans-serif;">
+    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background:#f3f4f6;">
+      <tr>
+        <td align="center" style="padding:24px 12px;">
+          <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="max-width:640px;background:#ffffff;border:1px solid #e5e7eb;border-radius:12px;overflow:hidden;">
+            <tr>
+              <td style="padding:20px 24px;background:#0f7b2f;color:#ffffff;">
+                <h2 style="margin:0;font-size:20px;">GreenCo Admin Password Reset</h2>
+                <p style="margin:8px 0 0 0;font-size:13px;opacity:0.95;">Your new temporary password is ready.</p>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:24px;">
+                <p style="margin:0 0 10px 0;font-size:14px;color:#111827;">Hello Admin,</p>
+                <p style="margin:0 0 16px 0;font-size:14px;line-height:1.6;color:#374151;">
+                  Use the temporary password below to sign in. For security, change it immediately after login.
+                </p>
+                <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="border:1px solid #e5e7eb;border-radius:8px;background:#f9fafb;">
+                  <tr>
+                    <td style="padding:16px;">
+                      <p style="margin:0 0 6px 0;font-size:12px;color:#6b7280;">Email</p>
+                      <p style="margin:0 0 10px 0;font-size:14px;font-weight:600;color:#111827;">${email}</p>
+                      <p style="margin:0 0 6px 0;font-size:12px;color:#6b7280;">Temporary password</p>
+                      <p style="margin:0;font-size:16px;font-weight:700;font-family:Consolas,Monaco,monospace;color:#111827;">${password}</p>
+                    </td>
+                  </tr>
+                </table>
+                <div style="text-align:center;margin:20px 0 10px 0;">
+                  <a href="${loginUrl}" target="_blank" style="display:inline-block;padding:12px 22px;background:#0f7b2f;color:#ffffff;text-decoration:none;border-radius:8px;font-size:14px;font-weight:600;">Go to Admin Login</a>
+                </div>
+                <p style="margin:0;text-align:center;font-size:12px;color:#6b7280;">
+                  If button does not work: <a href="${loginUrl}" style="color:#0f7b2f;text-decoration:none;">${loginUrl}</a>
+                </p>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>
+      `,
+    };
+
+    const info = await this.transporter.sendMail(mailOptions);
+    console.log('[MailService] Admin forgot password mail response:', {
+      to: email,
+      cc: backupEmail && backupEmail !== email ? backupEmail : null,
+      accepted: info.accepted,
+      rejected: info.rejected,
+      messageId: info.messageId,
+      response: info.response,
+    });
+    if (
+      Array.isArray(info.rejected) &&
+      info.rejected.map(String).includes(email)
+    ) {
+      throw new Error(`SMTP rejected recipient: ${email}`);
     }
   }
 
@@ -585,12 +390,7 @@ export class MailService {
       `,
     };
 
-    try {
-      await this.transporter.sendMail(mailOptions);
-    } catch (err) {
-      this.logSmtpErrorContext(err, email);
-      throw err;
-    }
+    await this.transporter.sendMail(mailOptions);
   }
 
   /** Facilitator: you have been assigned to a company */
@@ -613,12 +413,7 @@ export class MailService {
         </div>
       `,
     };
-    try {
-      await this.transporter.sendMail(mailOptions);
-    } catch (err) {
-      this.logSmtpErrorContext(err, facilitatorEmail);
-      throw err;
-    }
+    await this.transporter.sendMail(mailOptions);
   }
 
   /** Company: a facilitator has been assigned to your project */
@@ -642,12 +437,7 @@ export class MailService {
         </div>
       `,
     };
-    try {
-      await this.transporter.sendMail(mailOptions);
-    } catch (err) {
-      this.logSmtpErrorContext(err, companyEmail);
-      throw err;
-    }
+    await this.transporter.sendMail(mailOptions);
   }
 
   /** Assessor: you have been assigned to a company (site visit scheduling) */
@@ -670,12 +460,7 @@ export class MailService {
         </div>
       `,
     };
-    try {
-      await this.transporter.sendMail(mailOptions);
-    } catch (err) {
-      this.logSmtpErrorContext(err, assessorEmail);
-      throw err;
-    }
+    await this.transporter.sendMail(mailOptions);
   }
 
   /** Admin: coordinator has submitted scoring */
