@@ -14,10 +14,6 @@ export class NotificationsService {
     private readonly notificationModel: Model<NotificationLogDocument>,
   ) {}
 
-  /**
-   * Create an in-app notification (matches Laravel __notification_log).
-   * @param category Optional display type for frontend (ticket, message, team, update). Returned as notify_type in list API.
-   */
   async create(
     title: string,
     content: string,
