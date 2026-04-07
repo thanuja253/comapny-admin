@@ -60,6 +60,7 @@ export class CompanyAuthController {
   @Get('register')
   async getRegisterMasters() {
     const masters = await this.registrationMastersService.getRegistrationMasters();
+    const submitted = await this.companyAuthService.getSubmittedCompanies();
     return {
       status: 'success',
       message: 'Registration form data',
@@ -75,6 +76,7 @@ export class CompanyAuthController {
           { id: 'cii', name: 'cii' },
           { id: 'facilitator', name: 'facilitator' },
         ],
+        submitted_companies: submitted.data,
         ...masters.data,
       },
     };
@@ -143,6 +145,11 @@ export class CompanyAuthController {
   @Get('companies-list')
   async getCompaniesList(@Query('name') name?: string) {
     return this.companyAuthService.getCompaniesList(name);
+  }
+
+  @Get('submitted-companies')
+  async getSubmittedCompanies(@Query('q') q?: string) {
+    return this.companyAuthService.getSubmittedCompanies(q);
   }
 
   /**

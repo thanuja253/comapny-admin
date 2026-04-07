@@ -909,5 +909,37 @@ export class CompanyAuthService {
       },
     };
   }
+
+  async getSubmittedCompanies(searchTerm?: string) {
+    const query: any = {};
+    if (searchTerm) {
+      query.$or = [
+        { name: { $regex: searchTerm, $options: 'i' } },
+        { email: { $regex: searchTerm, $options: 'i' } },
+        { mobile: { $regex: searchTerm, $options: 'i' } },
+      ];
+    }
+
+    const companies = await this.companyModel
+      .find(query)
+      .sort({ createdAt: -1 })
+      .select('name email mobile account_status verified_status createdAt')
+      .lean();
+
+    return {
+      status: 'success',
+      message: 'Submitted companies retrieved successfully',
+      data: companies.map((company: any, index: number) => ({
+        sno: index + 1,
+        id: company._id.toString(),
+        name: company.name || '',
+        email: company.email || '',
+        mobile: company.mobile || '',
+        account_status: company.account_status || '0',
+        verified_status: company.verified_status || '0',
+        created_at: company.createdAt || null,
+      })),
+    };
+  }
 }
 
