@@ -4,88 +4,13 @@ import { AppModule } from './app.module';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import { join } from 'path';
-import * as fs from 'fs';
 import * as express from 'express';
-import { CORS_ALLOWED_HEADERS, getAllowedCorsOrigin } from './common/cors-allow.util';
+import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {
     bodyParser: false, // Disable automatic body parsing to allow Multer to handle multipart/form-data
   });
-
-  // CORS must run before other middleware so preflight and cross-port localhost work reliably.
-  app.enableCors({
-    origin: (origin, callback) => {
-      if (!origin) return callback(null, true);
-      const allowed = getAllowedCorsOrigin(origin);
-      if (allowed) return callback(null, allowed);
-      callback(null, false);
-    },
-    credentials: true,
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-    allowedHeaders: CORS_ALLOWED_HEADERS,
-    exposedHeaders: ['Content-Disposition'],
-    optionsSuccessStatus: 200,
-  });
-
-  // Same root as multer (registration-info-upload.config): process.cwd()/uploads.
-  // __dirname-based paths can miss files if cwd differs from dist layout (e.g. some hosts).
-  const uploadsRoot = join(process.cwd(), 'uploads');
-  if (!fs.existsSync(uploadsRoot)) {
-    fs.mkdirSync(uploadsRoot, { recursive: true });
-  }
-
-  const findUniqueFinanceFileDir = (subdir: 'finance-v2-payments' | 'finance-v2', filename: string): string | null => {
-    const companyRoot = join(uploadsRoot, 'company');
-    if (!fs.existsSync(companyRoot)) return null;
-    const hits: string[] = [];
-    for (const ent of fs.readdirSync(companyRoot, { withFileTypes: true })) {
-      if (!ent.isDirectory()) continue;
-      const abs = join(companyRoot, ent.name, subdir, filename);
-      if (fs.existsSync(abs)) hits.push(ent.name);
-    }
-    return hits.length === 1 ? hits[0] : null;
-  };
-
-  // Legacy URLs used uploads/companyproject/{projectId}/… — files live under uploads/company/{projectId}/… (multer).
-  app.use((req, res, next) => {
-    if (req.method !== 'GET' && req.method !== 'HEAD') return next();
-    const raw = req.url || '';
-    const [pathOnly] = raw.split('?');
-    const m = pathOnly.match(
-      /^\/uploads\/companyproject\/([^/]+)\/(finance-v2-payments|finance-v2)\/([^/]+)$/,
-    );
-    if (!m) return next();
-    const [, id, subdir, filename] = m;
-    const wrong = join(uploadsRoot, 'companyproject', id, subdir, decodeURIComponent(filename));
-    const canonical = join(uploadsRoot, 'company', id, subdir, decodeURIComponent(filename));
-    if (!fs.existsSync(wrong) && fs.existsSync(canonical)) {
-      return res.redirect(302, `/uploads/company/${id}/${subdir}/${decodeURIComponent(filename)}`);
-    }
-    return next();
-  });
-
-  // DB used company_id in paths while multer wrote under project _id; find the real folder by filename.
-  app.use((req, res, next) => {
-    if (req.method !== 'GET' && req.method !== 'HEAD') return next();
-    const raw = req.url || '';
-    const [pathOnly] = raw.split('?');
-    const m = pathOnly.match(
-      /^\/uploads\/company\/([^/]+)\/(finance-v2-payments|finance-v2)\/([^/]+)$/,
-    );
-    if (!m) return next();
-    const [, segment, subdir, encName] = m;
-    const filename = decodeURIComponent(encName);
-    const requested = join(uploadsRoot, 'company', segment, subdir as 'finance-v2-payments' | 'finance-v2', filename);
-    if (fs.existsSync(requested)) return next();
-    const found = findUniqueFinanceFileDir(subdir as 'finance-v2-payments' | 'finance-v2', filename);
-    if (found && found !== segment) {
-      return res.redirect(302, `/uploads/company/${found}/${subdir}/${encodeURIComponent(filename)}`);
-    }
-    return next();
-  });
-
-  app.use('/uploads', express.static(uploadsRoot));
 
   // Manually add JSON and URL-encoded body parsers, but skip multipart/form-data
   // This allows Multer to handle multipart/form-data without interference
@@ -109,70 +34,6 @@ async function bootstrap() {
     return express.urlencoded({ extended: true })(req, res, next);
   });
 
-  // Backward compatibility: old frontend calls /admin/* while backend uses /api/admin/*.
-  app.use((req, res, next) => {
-    const url = req.url || '';
-    if (url.startsWith('/admin/')) {
-      req.url = `/api${url}`;
-    }
-    next();
-  });
-
-  // Backward compatibility for sector routes:
-  // Frontend often calls plural/master-data paths while backend handler is singular (/api/admin/sector).
-  app.use((req, _res, next) => {
-    const original = req.url || '';
-    const [pathOnly, query = ''] = original.split('?');
-    const suffix = query ? `?${query}` : '';
-
-    const pluralWithId = pathOnly.match(/^\/api\/admin\/sectors\/([^/]+)$/);
-    if (pluralWithId) {
-      req.url = `/api/admin/sector/${pluralWithId[1]}${suffix}`;
-      return next();
-    }
-    if (pathOnly === '/api/admin/sectors') {
-      req.url = `/api/admin/sector${suffix}`;
-      return next();
-    }
-
-    const masterDataWithId = pathOnly.match(/^\/api\/admin\/master-data\/sectors\/([^/]+)$/);
-    if (masterDataWithId) {
-      req.url = `/api/admin/sector/${masterDataWithId[1]}${suffix}`;
-      return next();
-    }
-    if (pathOnly === '/api/admin/master-data/sectors') {
-      req.url = `/api/admin/sector${suffix}`;
-      return next();
-    }
-
-    next();
-  });
-
-  // Legacy assessor profile update aliases used by frontend:
-  // /api/admin/assessors/:id/profile and /api/admin/assessors/:id/public -> /api/admin/assessors/:id/edit
-  app.use((req, res, next) => {
-    const url = req.url || '';
-    const profileAlias = /^\/api\/admin\/assessors\/([^/]+)\/(profile|public)(\/?|\?.*)$/i;
-    if (profileAlias.test(url)) {
-      req.url = url.replace(profileAlias, '/api/admin/assessors/$1/edit$3');
-    }
-    next();
-  });
-
-  // Legacy admin assessor assignment alias:
-  // admin UI may post /api/company/projects/:projectId/assign-assessor
-  // but admin backend route is /api/admin/assign_assessor/:projectId.
-  app.use((req, _res, next) => {
-    const original = req.url || '';
-    const [pathOnly, query = ''] = original.split('?');
-    const suffix = query ? `?${query}` : '';
-    const m = pathOnly.match(/^\/api\/company\/projects\/([^/]+)\/assign-assessor$/);
-    if (req.method === 'POST' && m) {
-      req.url = `/api/admin/assign_assessor/${m[1]}${suffix}`;
-    }
-    next();
-  });
-
   // Response time logging (skip static and health)
   app.use((req, res, next) => {
     const start = Date.now();
@@ -187,27 +48,50 @@ async function bootstrap() {
     next();
   });
 
+  // Serve static files from uploads directory
+  app.useStaticAssets(join(__dirname, '..', 'uploads'), {
+    prefix: '/uploads/',
+  });
+
+  // CORS: in development allow all origins to avoid "network error"; in production use allowlist
+  const isProduction = process.env.NODE_ENV === 'production';
+  const envOrigins = process.env.FRONTEND_URL
+    ? process.env.FRONTEND_URL.split(',').map((url) => url.trim())
+    : [];
+  const defaultOrigins = [
+    'http://localhost:3000',
+    'http://localhost:3002',
+    'http://localhost:3001',
+    'http://127.0.0.1:3000',
+    'http://127.0.0.1:3001',
+    'http://127.0.0.1:3002',
+    'https://cursor-greenco-mern.vercel.app',
+  ];
+  const allowedOrigins = envOrigins.length > 0 ? envOrigins : defaultOrigins;
+
+  app.enableCors({
+    origin: (origin, callback) => {
+      if (!origin) return callback(null, true);
+      // In development: allow every origin to rule out CORS as cause of network error
+      if (!isProduction) return callback(null, true);
+      if (allowedOrigins.includes(origin)) return callback(null, true);
+      if (origin.startsWith('http://localhost:') || origin.startsWith('https://localhost:')) return callback(null, true);
+      if (origin.startsWith('http://127.0.0.1:') || origin.startsWith('https://127.0.0.1:')) return callback(null, true);
+      callback(null, false);
+    },
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'X-Requested-With'],
+    optionsSuccessStatus: 200,
+  });
+
   // Ensure OPTIONS (preflight) never returns 404: handle it early so browser gets 200 and sends the real request.
   app.use((req, res, next) => {
     if (req.method === 'OPTIONS') {
-      const originStr =
-        typeof req.headers.origin === 'string' ? req.headers.origin : undefined;
-      const allowed = originStr ? getAllowedCorsOrigin(originStr) : false;
-      const corsOrigin = allowed || (!originStr ? 'http://localhost:3000' : false);
-      if (!corsOrigin) {
-        res.status(403).end();
-        return;
-      }
-      const requested = req.headers['access-control-request-headers'];
-      const reqHeaders =
-        typeof requested === 'string' && requested.trim()
-          ? requested
-          : CORS_ALLOWED_HEADERS;
-      const reqMethod = req.headers['access-control-request-method'] || 'GET, POST, PUT, DELETE, PATCH, OPTIONS';
-      res.setHeader('Access-Control-Allow-Origin', corsOrigin);
-      res.setHeader('Vary', 'Origin');
-      res.setHeader('Access-Control-Allow-Methods', Array.isArray(reqMethod) ? reqMethod.join(', ') : reqMethod);
-      res.setHeader('Access-Control-Allow-Headers', Array.isArray(reqHeaders) ? reqHeaders.join(', ') : reqHeaders);
+      const origin = req.headers.origin || '*';
+      res.setHeader('Access-Control-Allow-Origin', origin);
+      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, Accept, X-Requested-With');
       res.setHeader('Access-Control-Allow-Credentials', 'true');
       res.status(200).end();
       return;
@@ -229,6 +113,16 @@ async function bootstrap() {
       },
     }),
   );
+
+  // Swagger docs
+  const swaggerConfig = new DocumentBuilder()
+    .setTitle('Green Co API')
+    .setDescription('Green Co backend API documentation')
+    .setVersion('1.0')
+    .addBearerAuth()
+    .build();
+  const swaggerDocument = SwaggerModule.createDocument(app, swaggerConfig);
+  SwaggerModule.setup('api/docs', app, swaggerDocument);
 
   // Set timeout for requests (30 seconds)
   const server = app.getHttpServer();
