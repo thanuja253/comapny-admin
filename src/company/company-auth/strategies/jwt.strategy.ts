@@ -23,7 +23,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
   }
 
   async validate(payload: any) {
-    if (!Types.ObjectId.isValid(payload?.sub)) {
+    if (!payload?.sub || !Types.ObjectId.isValid(String(payload.sub))) {
       throw new UnauthorizedException({
         status: 'error',
         message: 'Unauthorized. Please check your credentials.',
