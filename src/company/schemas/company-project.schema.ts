@@ -3,17 +3,6 @@ import { Document, Schema as MongooseSchema } from 'mongoose';
 
 export type CompanyProjectDocument = CompanyProject & Document;
 
-/** Up to 4 informational Launch & Training sessions (admin uploads; no approval flow). */
-const LaunchTrainingSessionSubSchema = new MongooseSchema(
-  {
-    relative_path: { type: String, required: true },
-    original_filename: { type: String },
-    session_date: { type: Date },
-    uploaded_at: { type: Date, default: () => new Date() },
-  },
-  { _id: false },
-);
-
 @Schema({ timestamps: true })
 export class CompanyProject {
   @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'Company', required: true })
@@ -97,10 +86,23 @@ export class CompanyProject {
   @Prop()
   launch_training_report_date?: Date;
 
-  @Prop({ type: [LaunchTrainingSessionSubSchema], default: [] })
+  /** Up to 4 Launch & Training sessions (document + date each). Legacy single fields above remain for backward compatibility. */
+  @Prop({
+    type: [
+      {
+        session_index: { type: Number, required: true },
+        document_path: { type: String, required: true },
+        document_filename: { type: String },
+        session_date: { type: Date },
+        uploaded_at: { type: Date, default: Date.now },
+      },
+    ],
+    default: [],
+  })
   launch_training_sessions?: Array<{
-    relative_path: string;
-    original_filename?: string;
+    session_index: number;
+    document_path: string;
+    document_filename?: string;
     session_date?: Date;
     uploaded_at?: Date;
   }>;
@@ -140,131 +142,6 @@ export class CompanyProject {
   /** When this project was used as source for recertification, the new project id (so quickview can show "open new project" instead of step 24). */
   @Prop({ type: MongooseSchema.Types.ObjectId, required: false })
   recertification_project_id?: MongooseSchema.Types.ObjectId;
-
-  /** Plaque dispatch details captured from Add Plaque form. */
-  @Prop({
-    type: {
-      contact_person: { type: String, default: '' },
-      designation: { type: String, default: '' },
-      mobile: { type: String, default: '' },
-      company_name: { type: String, default: '' },
-      address: { type: String, default: '' },
-    },
-    default: null,
-  })
-  plaque_details?: {
-    contact_person: string;
-    designation: string;
-    mobile: string;
-    company_name: string;
-    address: string;
-  } | null;
-
-  /** Outstanding details captured from Finance > Outstanding form. */
-  @Prop({
-    type: {
-      outstanding_id: { type: String, default: null },
-      outstanding_amount: { type: Number, default: 0 },
-      date: { type: Date, default: null },
-      remarks: { type: String, default: '' },
-      status: { type: String, default: 'Unpaid' },
-      outstanding_amt_paid: { type: Number, default: 0 },
-      due_outstanding_amt: { type: Number, default: 0 },
-      paid_date: { type: Date, default: null },
-      paid_remark: { type: String, default: '' },
-      payment_history: {
-        type: [
-          {
-            payment_amount: { type: Number, default: 0 },
-            paid_date: { type: Date, default: null },
-            paid_remark: { type: String, default: '' },
-            paid_total_after: { type: Number, default: 0 },
-            due_amount_after: { type: Number, default: 0 },
-            status_after: { type: String, default: 'Unpaid' },
-            source: { type: String, default: 'due_payment' }, // due_payment | initial_paid | legacy_backfill | manual_update
-            created_at: { type: Date, default: () => new Date() },
-          },
-        ],
-        default: [],
-      },
-    },
-    default: null,
-  })
-  outstanding_details?: {
-    outstanding_id?: string | null;
-    outstanding_amount: number;
-    date: Date | null;
-    remarks: string;
-    status: 'Unpaid' | 'Partial' | 'Paid';
-    outstanding_amt_paid?: number;
-    due_outstanding_amt?: number;
-    paid_date?: Date | null;
-    paid_remark?: string;
-    payment_history?: Array<{
-      payment_amount: number;
-      paid_date: Date | null;
-      paid_remark: string;
-      paid_total_after: number;
-      due_amount_after: number;
-      status_after: 'Unpaid' | 'Partial' | 'Paid';
-      source: 'due_payment' | 'initial_paid' | 'legacy_backfill' | 'manual_update';
-      created_at: Date;
-    }>;
-  } | null;
-
-  /** Multiple outstanding invoices (new), each with independent payment history. */
-  @Prop({
-    type: [
-      {
-        outstanding_id: { type: String, required: true },
-        outstanding_amount: { type: Number, default: 0 },
-        date: { type: Date, default: null },
-        remarks: { type: String, default: '' },
-        status: { type: String, default: 'Unpaid' },
-        outstanding_amt_paid: { type: Number, default: 0 },
-        due_outstanding_amt: { type: Number, default: 0 },
-        paid_date: { type: Date, default: null },
-        paid_remark: { type: String, default: '' },
-        payment_history: {
-          type: [
-            {
-              payment_amount: { type: Number, default: 0 },
-              paid_date: { type: Date, default: null },
-              paid_remark: { type: String, default: '' },
-              paid_total_after: { type: Number, default: 0 },
-              due_amount_after: { type: Number, default: 0 },
-              status_after: { type: String, default: 'Unpaid' },
-              source: { type: String, default: 'due_payment' },
-              created_at: { type: Date, default: () => new Date() },
-            },
-          ],
-          default: [],
-        },
-      },
-    ],
-    default: [],
-  })
-  outstanding_details_list?: Array<{
-    outstanding_id: string;
-    outstanding_amount: number;
-    date: Date | null;
-    remarks: string;
-    status: 'Unpaid' | 'Partial' | 'Paid';
-    outstanding_amt_paid?: number;
-    due_outstanding_amt?: number;
-    paid_date?: Date | null;
-    paid_remark?: string;
-    payment_history?: Array<{
-      payment_amount: number;
-      paid_date: Date | null;
-      paid_remark: string;
-      paid_total_after: number;
-      due_amount_after: number;
-      status_after: 'Unpaid' | 'Partial' | 'Paid';
-      source: 'due_payment' | 'initial_paid' | 'legacy_backfill' | 'manual_update';
-      created_at: Date;
-    }>;
-  }>;
 }
 
 export const CompanyProjectSchema = SchemaFactory.createForClass(CompanyProject);
