@@ -612,7 +612,7 @@ export class CompanyProjectsService {
     const normalized = this.toPublicFilePath(path);
     if (!normalized) return '';
     if (normalized.startsWith('http://') || normalized.startsWith('https://')) return normalized;
-    const baseUrl = (process.env.API_BASE_URL || 'https://green-co-api-04z5.onrender.com').replace(/\/+$/, '');
+    const baseUrl = (process.env.API_BASE_URL || 'https://comapny-admin.onrender.com').replace(/\/+$/, '');
     return `${baseUrl}${normalized}`;
   }
 
@@ -1809,7 +1809,7 @@ export class CompanyProjectsService {
       .lean();
     const companyById = new Map(companies.map((c: any) => [String(c._id), c]));
 
-    const baseUrl = process.env.API_BASE_URL || 'http://localhost:3001';
+    const baseUrl = process.env.API_BASE_URL || 'https://comapny-admin.onrender.com';
     const rows = projects
       .map((p: any) => {
         const company = companyById.get(String(p.company_id)) || {};
@@ -2236,7 +2236,7 @@ export class CompanyProjectsService {
     const company = await this.companyModel.findById(project.company_id).lean();
 
     // Convert relative paths to full URLs for frontend
-    const baseUrl = process.env.API_BASE_URL || 'https://green-co-api-04z5.onrender.com';
+    const baseUrl = process.env.API_BASE_URL || 'https://comapny-admin.onrender.com';
     
     const certificate_document = project.certificate_document_url
       ? project.certificate_document_url.startsWith('http')
@@ -3567,7 +3567,7 @@ export class CompanyProjectsService {
     }
 
     // Handle file uploads
-    const baseUrl = process.env.API_BASE_URL || 'https://green-co-api-04z5.onrender.com';
+    const baseUrl = process.env.API_BASE_URL || 'https://comapny-admin.onrender.com';
     console.log('[Registration Info Service] Processing files:', {
       hasFiles: !!files,
       company_brief_profile: files?.company_brief_profile?.[0]?.originalname,
@@ -3838,7 +3838,7 @@ export class CompanyProjectsService {
       });
     }
 
-    const baseUrl = process.env.API_BASE_URL || 'https://green-co-api-04z5.onrender.com';
+    const baseUrl = process.env.API_BASE_URL || 'https://comapny-admin.onrender.com';
     const registrationInfo = project.registration_info || {};
 
     const responseData: any = { ...omitRegistrationFileBinaries(registrationInfo) };
@@ -4020,7 +4020,7 @@ export class CompanyProjectsService {
     }
 
     const effectiveProjectId = String(resolved._id);
-    const baseUrl = (process.env.API_BASE_URL || 'https://green-co-api-admin.onrender.com').replace(/\/+$/, '');
+    const baseUrl = (process.env.API_BASE_URL || 'https://comapny-admin.onrender.com').replace(/\/+$/, '');
     const registrationInfo = resolved.registration_info || {};
     const responseData: any = { ...omitRegistrationFileBinaries(registrationInfo) };
 
@@ -5089,7 +5089,7 @@ export class CompanyProjectsService {
     };
 
     // Base URL for document URLs
-    const baseUrl = process.env.API_BASE_URL || 'https://green-co-api-04z5.onrender.com';
+    const baseUrl = process.env.API_BASE_URL || 'https://comapny-admin.onrender.com';
 
     // Tab visibility: after Assessor Visit (14) → show Certificate; after Certificate (15+) → show Recertification.
     // Don't return 15+ until certificate is uploaded (so Recertification stays hidden until certificate phase is done).
@@ -5479,7 +5479,7 @@ export class CompanyProjectsService {
       });
     }
 
-    const baseUrl = process.env.API_BASE_URL || 'https://green-co-api-04z5.onrender.com';
+    const baseUrl = process.env.API_BASE_URL || 'https://comapny-admin.onrender.com';
     // Use Laravel-compatible path: uploads/company/{projectId}/
     const relativePath = `uploads/company/${projectId}/${file.filename}`;
 
@@ -6067,7 +6067,7 @@ export class CompanyProjectsService {
       });
     }
 
-    const baseUrl = process.env.API_BASE_URL || 'https://green-co-api-04z5.onrender.com';
+    const baseUrl = process.env.API_BASE_URL || 'https://comapny-admin.onrender.com';
     const relativePath = `uploads/resources/${projectId}/${file.filename}`;
     const fullUrl = `${baseUrl}/${relativePath}`;
 
@@ -6264,7 +6264,7 @@ export class CompanyProjectsService {
       throw new NotFoundException({ status: 'error', message: 'Project not found' });
     }
 
-    const baseUrl = process.env.API_BASE_URL || 'https://green-co-api-04z5.onrender.com';
+    const baseUrl = process.env.API_BASE_URL || 'https://comapny-admin.onrender.com';
     const response: any = { proposal_document: null, work_order: null };
     const projectAny = project as any;
     const workOrderAny = workOrder as any;
@@ -6478,7 +6478,7 @@ export class CompanyProjectsService {
       throw new NotFoundException({ status: 'error', message: 'Project not found' });
     }
 
-    const baseUrl = (process.env.API_BASE_URL || 'https://green-co-api-admin.onrender.com').replace(/\/+$/, '');
+    const baseUrl = (process.env.API_BASE_URL || 'https://comapny-admin.onrender.com').replace(/\/+$/, '');
     const extras = this.workOrderStatusExtras(workOrder as any);
 
     if (!workOrder || !(workOrder as any).wo_doc) {
@@ -6990,7 +6990,7 @@ export class CompanyProjectsService {
       throw new NotFoundException({ status: 'error', message: 'Project not found' });
     }
     const projectAny = project as any;
-    const baseUrl = process.env.API_BASE_URL || 'https://green-co-api-04z5.onrender.com';
+    const baseUrl = process.env.API_BASE_URL || 'https://comapny-admin.onrender.com';
     const docPath = projectAny.launch_training_document;
     const legacyDocumentUrl = docPath
       ? docPath.startsWith('http')
@@ -7167,7 +7167,7 @@ export class CompanyProjectsService {
     (project as any).launch_training_sessions = existing;
     await project.save();
 
-    const baseUrl = process.env.API_BASE_URL || 'https://green-co-api-admin.onrender.com';
+    const baseUrl = process.env.API_BASE_URL || 'https://comapny-admin.onrender.com';
     const fullUrl = `${baseUrl}/${relativePath.replace(/^\//, '')}`;
 
     const company = await this.companyModel.findById(companyId).lean();
@@ -7279,7 +7279,7 @@ export class CompanyProjectsService {
     const group = sectorDoc?.group_name ?? '';
     const sectorName = sectorDoc?.name ?? '';
 
-    const baseUrl = process.env.API_BASE_URL || 'https://green-co-api-04z5.onrender.com';
+    const baseUrl = process.env.API_BASE_URL || 'https://comapny-admin.onrender.com';
 
     const toUrl = (path: string | undefined): string | null => {
       if (!path) return null;
@@ -7542,7 +7542,7 @@ export class CompanyProjectsService {
       .sort({ createdAt: -1 })
       .lean();
 
-    const baseUrl = (process.env.API_BASE_URL || 'https://green-co-api-admin.onrender.com').replace(/\/+$/, '');
+    const baseUrl = (process.env.API_BASE_URL || 'https://comapny-admin.onrender.com').replace(/\/+$/, '');
     const toUrl = (path: string | undefined) => {
       if (!path) return null;
       return path.startsWith('http') ? path : `${baseUrl}/${path.replace(/^\/+/, '')}`;
@@ -8430,7 +8430,7 @@ export class CompanyProjectsService {
       .sort({ createdAt: -1 })
       .lean();
 
-    const baseUrl = process.env.API_BASE_URL || 'https://green-co-api-admin.onrender.com';
+    const baseUrl = process.env.API_BASE_URL || 'https://comapny-admin.onrender.com';
     const toUrl = (path: string | undefined) =>
       !path ? null : path.startsWith('http') ? path : `${baseUrl}/${path.replace(/^\//, '')}`;
 
@@ -8504,7 +8504,7 @@ export class CompanyProjectsService {
       .sort({ createdAt: -1 })
       .lean();
 
-    const baseUrl = process.env.API_BASE_URL || 'https://green-co-api-04z5.onrender.com';
+    const baseUrl = process.env.API_BASE_URL || 'https://comapny-admin.onrender.com';
     const toUrl = (path: string | undefined) => {
       if (!path) return null;
       return path.startsWith('http') ? path : `${baseUrl}/${path.replace(/^\//, '')}`;
@@ -9255,7 +9255,7 @@ export class CompanyProjectsService {
       this.mailService.sendInvoiceRaisedEmail(company.email, company.name || 'Company', invoiceLabel, projectCode).catch((e) => console.error('Invoice email to company failed:', e));
     }
 
-    const baseUrl = process.env.API_BASE_URL || 'https://green-co-api-04z5.onrender.com';
+    const baseUrl = process.env.API_BASE_URL || 'https://comapny-admin.onrender.com';
     const documentUrl = relativePath.startsWith('http') ? relativePath : `${baseUrl}/${relativePath.replace(/^\//, '')}`;
 
     return {
@@ -9526,7 +9526,7 @@ export class CompanyProjectsService {
       })
       .sort({ createdAt: -1 });
 
-    const baseUrl = process.env.API_BASE_URL || 'https://green-co-api-04z5.onrender.com';
+    const baseUrl = process.env.API_BASE_URL || 'https://comapny-admin.onrender.com';
     // Use Laravel-compatible path: uploads/companyproject/{projectId}/
     const relativePath = `uploads/companyproject/${projectId}/${file.filename}`;
     const fullUrl = `${baseUrl}/${relativePath}`;
@@ -9648,7 +9648,7 @@ export class CompanyProjectsService {
       });
     }
 
-    const baseUrl = process.env.API_BASE_URL || 'https://green-co-api-04z5.onrender.com';
+    const baseUrl = process.env.API_BASE_URL || 'https://comapny-admin.onrender.com';
     const relativePath = `uploads/companyproject/launchAndTraining/${companyId}/${file.filename}`;
     const fullUrl = `${baseUrl}/${relativePath}`;
 
@@ -9718,7 +9718,7 @@ export class CompanyProjectsService {
       });
     }
 
-    const baseUrl = process.env.API_BASE_URL || 'https://green-co-api-admin.onrender.com';
+    const baseUrl = process.env.API_BASE_URL || 'https://comapny-admin.onrender.com';
     const relativePath = `uploads/companyproject/launchAndTraining/${resolved.projectId}/${file.filename}`;
     const fullUrl = `${baseUrl}/${relativePath}`;
     const reportDate = launchTrainingReportDate
@@ -10428,7 +10428,7 @@ export class CompanyProjectsService {
     // Handle contract document upload if provided
     let contractDocumentPath = null;
     if (contractDocument) {
-      const baseUrl = process.env.API_BASE_URL || 'https://green-co-api-04z5.onrender.com';
+      const baseUrl = process.env.API_BASE_URL || 'https://comapny-admin.onrender.com';
       const relativePath = `uploads/facilitator-contracts/${projectId}/${contractDocument.filename}`;
       contractDocumentPath = `${baseUrl}/${relativePath}`;
       console.log('[Assign Facilitator] Contract document saved:', contractDocumentPath);

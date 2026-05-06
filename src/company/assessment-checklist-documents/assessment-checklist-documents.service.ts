@@ -39,7 +39,7 @@ export class AssessmentChecklistDocumentsService {
   ) {}
 
   private toUrl(path: string): string {
-    const base = (process.env.API_BASE_URL || 'http://localhost:3001').replace(/\/+$/, '');
+    const base = (process.env.API_BASE_URL || 'https://comapny-admin.onrender.com').replace(/\/+$/, '');
     const normalized = path.startsWith('/') ? path : `/${path}`;
     return `${base}${normalized}`;
   }
