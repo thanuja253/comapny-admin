@@ -11,125 +11,126 @@ export class Assessor {
   @Prop({ required: true, unique: true, lowercase: true, trim: true })
   email: string;
 
+  @Prop({ required: true, trim: true })
+  mobile: string;
+
   @Prop({ select: false })
   password?: string;
-
-  @Prop({ trim: true })
-  mobile?: string;
 
   @Prop({ default: '1' })
   status: string;
 
-  @Prop({ default: '0' })
-  verification_status?: string;
+  @Prop()
+  industry_category?: string;
 
-  @Prop({ default: '0' })
-  profile_updated?: string;
-
-  @Prop({ trim: true })
+  @Prop()
   alternate_mobile?: string;
 
-  @Prop({ trim: true })
-  category_id?: string;
+  @Prop()
+  address_line_1?: string;
 
-  @Prop({ trim: true })
-  industryCategory?: string;
+  @Prop()
+  address_line_2?: string;
 
-  @Prop({ trim: true })
-  assessor_grade_id?: string;
-
-  @Prop({ trim: true })
-  assessor_grade?: string;
-
-  @Prop({ trim: true })
-  grade?: string;
-
-  @Prop({ trim: true })
-  state_id?: string;
-
-  @Prop({ trim: true })
-  city?: string;
-
-  @Prop({ trim: true })
-  address1?: string;
-
-  @Prop({ trim: true })
-  address2?: string;
-
-  @Prop({ trim: true })
+  @Prop()
   pincode?: string;
 
-  @Prop({ trim: true })
-  gst_enabled?: string;
+  @Prop()
+  city?: string;
 
-  @Prop({ trim: true })
-  gst?: string;
+  @Prop()
+  state?: string;
 
-  @Prop({ trim: true })
-  gstin_no?: string;
-
-  @Prop({ trim: true })
-  emergency_name?: string;
-
-  @Prop({ trim: true })
-  emergency_mobile?: string;
-
-  @Prop({ trim: true })
-  emergency_address1?: string;
-
-  @Prop({ trim: true })
-  emergency_address2?: string;
-
-  @Prop({ trim: true })
-  emergency_city?: string;
-
-  @Prop({ trim: true })
-  emergency_state_id?: string;
-
-  @Prop({ trim: true })
-  emergency_pincode?: string;
-
-  @Prop({ trim: true })
-  bank_name?: string;
-
-  @Prop({ trim: true })
-  account_number?: string;
-
-  @Prop({ trim: true })
-  branch_name?: string;
-
-  @Prop({ trim: true })
-  ifsc_code?: string;
-
-  @Prop({ trim: true })
-  company_logo?: string;
-
-  @Prop({ trim: true })
-  cancelled_check?: string;
-
-  @Prop({ trim: true })
-  health_doc?: string;
-
-  @Prop({ trim: true })
-  gst_form?: string;
-
-  @Prop({ trim: true })
-  vendor_stamp?: string;
-
-  @Prop({ trim: true })
-  ndc_form?: string;
-
-  @Prop({ trim: true })
-  pan?: string;
-
-  @Prop({ trim: true })
+  @Prop()
   pan_number?: string;
 
-  @Prop({ trim: true })
-  pan_no?: string;
+  @Prop()
+  enrollment_date?: string;
 
-  @Prop({ trim: true })
+  @Prop({ default: false })
+  gst_registered?: boolean;
+
+  @Prop()
+  gst_number?: string;
+
+  @Prop({ default: false })
+  lead_assessor?: boolean;
+
+  @Prop()
+  assessor_grade?: string;
+
+  @Prop()
+  emergency_contact_name?: string;
+
+  @Prop()
+  emergency_mobile?: string;
+
+  @Prop()
+  emergency_address_line_1?: string;
+
+  @Prop()
+  emergency_address_line_2?: string;
+
+  @Prop()
+  emergency_city?: string;
+
+  @Prop()
+  emergency_state?: string;
+
+  @Prop()
+  emergency_pincode?: string;
+
+  @Prop()
+  bank_name?: string;
+
+  @Prop()
+  account_number?: string;
+
+  @Prop()
+  branch_name?: string;
+
+  @Prop()
+  ifsc_code?: string;
+
+  @Prop()
   biodata?: string;
+
+  @Prop()
+  vendor_registration_form?: string;
+
+  @Prop()
+  non_disclosure_agreement?: string;
+
+  @Prop()
+  health_declaration?: string;
+
+  @Prop()
+  gst_declaration?: string;
+
+  @Prop()
+  pan_card?: string;
+
+  @Prop()
+  cancelled_cheque?: string;
+
+  @Prop()
+  profile_image?: string;
+
+  @Prop({ default: 'Pending' })
+  approval_status?: string;
+
+  @Prop()
+  approval_remarks?: string;
+
+  @Prop({ default: 'Incomplete' })
+  profile_status?: string;
+
+  /**
+   * Per uploaded document: admin approve/reject. Keys match multer field names
+   * (e.g. pan_card, cancelled_cheque). Re-uploading a file resets that key to Pending.
+   */
+  @Prop({ type: Object, default: {} })
+  document_approvals?: Record<string, { status?: string; remarks?: string }>;
 }
 
 export const AssessorSchema = SchemaFactory.createForClass(Assessor);

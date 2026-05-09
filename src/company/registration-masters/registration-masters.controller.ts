@@ -1,4 +1,4 @@
-import { Controller, Get, Header } from '@nestjs/common';
+import { Controller, Get, Param } from '@nestjs/common';
 import { RegistrationMastersService } from './registration-masters.service';
 
 @Controller('api/company')
@@ -10,10 +10,6 @@ export class RegistrationMastersController {
   // GET /api/company/register-info
   // Public endpoint - no auth required for master data
   @Get('register-info')
-  @Header('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate')
-  @Header('Pragma', 'no-cache')
-  @Header('Expires', '0')
-  @Header('Surrogate-Control', 'no-store')
   async getRegisterInfo() {
     console.log('[RegistrationMastersController] GET /api/company/register-info called');
     const result = await this.registrationMastersService.getRegistrationMasters();
@@ -32,25 +28,19 @@ export class RegistrationMastersController {
    * Returns all states (id, name, code) for dropdowns and filters.
    */
   @Get('states')
-  @Header('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate')
-  @Header('Pragma', 'no-cache')
-  @Header('Expires', '0')
-  @Header('Surrogate-Control', 'no-store')
   async getAllStates() {
     return this.registrationMastersService.getAllStates();
   }
 
   /**
-   * GET /api/company/categories
-   * Returns industry categories for dropdowns.
+   * GET /api/company/all-states
+   * Returns complete states master list (including inactive).
    */
-  @Get('categories')
-  @Header('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate')
-  @Header('Pragma', 'no-cache')
-  @Header('Expires', '0')
-  @Header('Surrogate-Control', 'no-store')
-  async getAllCategories() {
-    return this.registrationMastersService.getAllCategories();
+  @Get('all-states')
+  @Get('states-all')
+  @Get('states_all')
+  async getAllStatesUnfiltered() {
+    return this.registrationMastersService.getAllStatesMaster();
   }
 
   /**
@@ -60,6 +50,15 @@ export class RegistrationMastersController {
   @Get('groups-sectors')
   async getGroupsAndSectors() {
     return this.registrationMastersService.getGroupsAndSectors();
+  }
+
+  /**
+   * GET /api/company/sectors
+   * Returns active sectors only (status = 1) for Registration form dropdown.
+   */
+  @Get('sectors')
+  async getActiveSectors() {
+    return this.registrationMastersService.getActiveSectors();
   }
 
   /**
@@ -73,12 +72,22 @@ export class RegistrationMastersController {
 
   /**
    * GET /api/company/assessor-grades
-   * Returns assessor grades for dropdown (DB-backed).
+   * Returns active assessor grades for frontend dropdown.
    */
   @Get('assessor-grades')
   async getAssessorGrades() {
-    return this.registrationMastersService.getAssessorGrades();
+    return this.registrationMastersService.getActiveAssessorGrades();
   }
+
+  /**
+   * GET /api/company/ifsc/:ifsc
+   * Returns bank and branch details for a valid IFSC.
+   */
+  @Get('ifsc/:ifsc')
+  async getBankDetailsByIfsc(@Param('ifsc') ifsc: string) {
+    return this.registrationMastersService.getBankDetailsByIfsc(ifsc);
+  }
+
 }
 
 

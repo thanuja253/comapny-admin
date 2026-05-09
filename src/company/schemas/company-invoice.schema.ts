@@ -25,6 +25,14 @@ export class CompanyInvoice {
   @Prop()
   invoice_document_filename?: string;
 
+  /** Historical invoice documents (re-uploads), oldest -> newest */
+  @Prop({ type: [{ path: String, filename: String, uploaded_at: Date }], default: [] })
+  invoice_document_history?: Array<{
+    path: string;
+    filename?: string;
+    uploaded_at?: Date;
+  }>;
+
   @Prop({ default: 0 })
   payable_amount?: number;
 
@@ -33,40 +41,6 @@ export class CompanyInvoice {
 
   @Prop({ default: 0 })
   total_amount?: number;
-
-  /** GST percentage rates */
-  @Prop({ default: 0 })
-  sgst?: number;
-
-  @Prop({ default: 0 })
-  cgst?: number;
-
-  @Prop({ default: 0 })
-  igst?: number;
-
-  /** GST component amounts */
-  @Prop({ default: 0 })
-  sgst_amt?: number;
-
-  @Prop({ default: 0 })
-  cgst_amt?: number;
-
-  @Prop({ default: 0 })
-  igst_amt?: number;
-
-  /** GST state-code metadata */
-  @Prop()
-  supplier_state_code?: string;
-
-  @Prop()
-  place_of_supply_state_code?: string;
-
-  /** Derived from state codes: intra | inter */
-  @Prop()
-  transaction_type?: string;
-
-  @Prop()
-  is_intra_state?: boolean;
 
   /** 'Online' | 'Offline' */
   @Prop()
@@ -86,30 +60,93 @@ export class CompanyInvoice {
   @Prop()
   offline_tran_doc_filename?: string;
 
+  /** Historical offline transaction proofs, oldest -> newest */
+  @Prop({ type: [{ path: String, filename: String, uploaded_at: Date }], default: [] })
+  offline_tran_doc_history?: Array<{
+    path: string;
+    filename?: string;
+    uploaded_at?: Date;
+  }>;
+
   /** Approval status for display (COMPANY_APPROVAL_STATUS / APPROVAL_STATUS_COLORS) */
   @Prop({ default: 0 })
   approval_status?: number;
 
-  /** Optional approval remarks (frontend may send remarks/approval_remarks). */
   @Prop()
   remarks?: string;
 
   @Prop()
-  approval_remarks?: string;
+  approved_by?: string;
 
-  /** Increments when payment is not acknowledged/rejected; frontend can use as form re-open key. */
+  @Prop()
+  approved_at?: Date;
+
+  @Prop()
+  payment_date?: Date;
+
+  /** v2 finance form fields (new APIs) */
+  @Prop()
+  invoice_type?: 'proforma' | 'tax';
+
+  @Prop()
+  invoice_title?: string;
+
   @Prop({ default: 0 })
-  reassign_key?: number;
+  sgst?: number;
 
-  /** Keeps old payment submissions when invoice is not acknowledged/rejected. */
-  @Prop({ type: Array, default: [] })
-  reupload_documents?: Array<{
-    payment_type?: string;
-    trans_id?: string;
-    offline_tran_doc?: string;
-    offline_tran_doc_filename?: string;
-    moved_at?: Date;
-  }>;
+  @Prop({ default: 0 })
+  cgst?: number;
+
+  @Prop({ default: 0 })
+  igst?: number;
+
+  /** Indian state code (GST), 01–38 */
+  @Prop()
+  supplier_state_code?: string;
+
+  @Prop()
+  place_of_supply_state_code?: string;
+
+  /** intra | inter when state codes are set; omitted for legacy rows */
+  @Prop()
+  transaction_type?: 'intra' | 'inter';
+
+  /** 0/1 toggle for every-15-days reminders */
+  @Prop({ default: 0 })
+  send_reminder?: number;
+
+  /** Optional recipient email override for reminders */
+  @Prop()
+  send_invoice_to?: string;
+
+  /** Next reminder due date for cron/manual reminder processing */
+  @Prop()
+  reminder_date?: Date;
+
+  @Prop()
+  last_reminder_sent_at?: Date;
+
+  /** Running paid amount against total_amount (v2) */
+  @Prop({ default: 0 })
+  paid_amount?: number;
+
+  /** Derived due amount = max(total_amount - paid_amount, 0) (v2) */
+  @Prop({ default: 0 })
+  due_amount?: number;
+
+  /** Unpaid | Partial | Paid */
+  @Prop({ default: 'Unpaid' })
+  outstanding_status?: string;
+
+  /** Reminder end policy (v2) */
+  @Prop({ default: 0 })
+  reminders_sent_count?: number;
+
+  @Prop()
+  max_reminders?: number;
+
+  @Prop()
+  reminder_end_date?: Date;
 }
 
 export const CompanyInvoiceSchema = SchemaFactory.createForClass(CompanyInvoice);

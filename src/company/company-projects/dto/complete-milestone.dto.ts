@@ -1,4 +1,4 @@
-import { IsBoolean, IsIn, IsInt, IsNotEmpty, IsOptional, Max, Min } from 'class-validator';
+import { IsBoolean, IsInt, IsNotEmpty, IsOptional, Max, Min } from 'class-validator';
 
 export class CompleteMilestoneDto {
   @IsInt()
@@ -12,11 +12,6 @@ export class CompleteMilestoneDto {
   @IsOptional()
   @IsBoolean()
   completed?: boolean = true;
-
-  /** Who completed this step — drives notification copy ("by company" vs "by CII"). Default: cii */
-  @IsOptional()
-  @IsIn(['company', 'cii'])
-  activity_type?: 'company' | 'cii';
 }
 
 

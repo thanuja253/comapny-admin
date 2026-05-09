@@ -1,8 +1,11 @@
 import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 import { CompanyProjectsController } from './company-projects.controller';
-import { AdminProjectsController } from './admin-projects.controller';
-import { CompanyPrimaryDataLegacyController } from './company-primary-data-legacy.controller';
+import { AdminCompanyFlowController } from './admin-company-flow.controller';
+import { AdminLaunchTrainingController } from './admin-launch-training.controller';
+import { AssessorCompanyProjectsController } from './assessor-company-projects.controller';
+import { FacilitatorFinanceV2Controller } from './facilitator-finance-v2.controller';
+import { FacilitatorLaunchTrainingController } from './facilitator-launch-training.controller';
 import { CompanyProjectsService } from './company-projects.service';
 import {
   CompanyProject,
@@ -55,17 +58,25 @@ import {
   MasterPrimaryDataChecklist,
   MasterPrimaryDataChecklistSchema,
 } from '../schemas/master-primary-data-checklist.schema';
+import {
+  CreditManagement,
+  CreditManagementSchema,
+} from '../schemas/credit-management.schema';
+import {
+  ParameterManagement,
+  ParameterManagementSchema,
+} from '../schemas/parameter-management.schema';
+import {
+  MasterChecklistSector,
+  MasterChecklistSectorSchema,
+} from '../schemas/master-checklist-sector.schema';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { MailModule } from '../../mail/mail.module';
-import { RegistrationMastersModule } from '../registration-masters/registration-masters.module';
-import { AdminAuthModule } from '../../admin/admin-auth/admin-auth.module';
 
 @Module({
   imports: [
-    AdminAuthModule,
     NotificationsModule,
     MailModule,
-    RegistrationMastersModule,
     MongooseModule.forFeature([
       { name: CompanyProject.name, schema: CompanyProjectSchema },
       { name: Company.name, schema: CompanySchema },
@@ -82,10 +93,21 @@ import { AdminAuthModule } from '../../admin/admin-auth/admin-auth.module';
       { name: Assessor.name, schema: AssessorSchema },
       { name: PrimaryDataForm.name, schema: PrimaryDataFormSchema },
       { name: MasterPrimaryDataChecklist.name, schema: MasterPrimaryDataChecklistSchema },
+      { name: CreditManagement.name, schema: CreditManagementSchema },
+      { name: ParameterManagement.name, schema: ParameterManagementSchema },
+      { name: MasterChecklistSector.name, schema: MasterChecklistSectorSchema },
     ]),
   ],
-  controllers: [CompanyProjectsController, AdminProjectsController, CompanyPrimaryDataLegacyController],
+  controllers: [
+    CompanyProjectsController,
+    AdminCompanyFlowController,
+    AdminLaunchTrainingController,
+    AssessorCompanyProjectsController,
+    FacilitatorFinanceV2Controller,
+    FacilitatorLaunchTrainingController,
+  ],
   providers: [CompanyProjectsService],
+  exports: [CompanyProjectsService],
 })
 export class CompanyProjectsModule {}
 

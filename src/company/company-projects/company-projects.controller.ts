@@ -1,12 +1,13 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Header,
   Param,
   Patch,
-  Query,
   Post,
+  Put,
   Request,
   Res,
   UseGuards,
@@ -18,39 +19,48 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { Response } from 'express';
-import { AnyFilesInterceptor, FileFieldsInterceptor, FileInterceptor } from '@nestjs/platform-express';
+import { FileFieldsInterceptor, FileInterceptor } from '@nestjs/platform-express';
 import { UploadedFile } from '@nestjs/common';
 import { diskStorage, memoryStorage } from 'multer';
 import { extname } from 'path';
 import { CompanyProjectsService } from './company-projects.service';
 import { JwtAuthGuard } from '../company-auth/guards/jwt-auth.guard';
 import { AccountStatusGuard } from '../company-auth/guards/account-status.guard';
+import { AdminJwtAuthGuard } from '../company-auth/guards/admin-jwt-auth.guard';
 import { join } from 'path';
 import * as fs from 'fs';
 import { CompleteMilestoneDto } from './dto/complete-milestone.dto';
-import { RegistrationInfoDto } from './dto/registration-info.dto';
 import { ApproveWorkOrderDto } from './dto/approve-workorder.dto';
+import { WorkOrderAcceptanceDetailsDto } from './dto/work-order-acceptance.dto';
+import { ProjectCodeUpsertDto } from './dto/project-code-upsert.dto';
 import { CreateProjectCodeDto } from './dto/create-project-code.dto';
-import { AssignCoordinatorDto } from './dto/assign-coordinator.dto';
 import { AssignAssessorDto } from './dto/assign-assessor.dto';
 import { AssignFacilitatorDto } from './dto/assign-facilitator.dto';
 import { SubmitPaymentDto } from './dto/submit-payment.dto';
-import { SubmitFinancePaymentDto } from './dto/submit-finance-payment.dto';
+import { UpdateInvoiceApprovalDto } from './dto/update-invoice-approval.dto';
+import { CreateProformaInvoiceV2Dto } from './dto/create-proforma-invoice-v2.dto';
+import { UpdateProformaInvoiceV2Dto } from './dto/update-proforma-invoice-v2.dto';
+import { UpdateFinanceV2ReminderDto } from './dto/update-finance-v2-reminder.dto';
+import { SubmitFinanceV2PaymentDto } from './dto/submit-finance-v2-payment.dto';
+import { UpdateFinanceV2ApprovalDto } from './dto/update-finance-v2-approval.dto';
 import { UploadLaunchAndTrainingDto } from './dto/upload-launch-and-training.dto';
-import { AddLaunchTrainingSessionDto } from './dto/add-launch-training-session.dto';
 import { PrimaryDataStoreDto } from './dto/primary-data-store.dto';
 import { PrimaryDataFormApprovalDto } from './dto/primary-data-approval.dto';
 import { UpdateAssessmentSubmittalDto } from './dto/update-assessment-submittal.dto';
 import { ScoreBandStatusDto } from './dto/score-band-status.dto';
-import { AdminJwtAuthGuard } from '../../admin/admin-auth/guards/admin-jwt-auth.guard';
-import { UpdateQuickviewDataDto } from './dto/update-quickview-data.dto';
-import { ReviewProposalDto } from './dto/review-proposal.dto';
-import { UpdateProposalStatusDto } from './dto/update-proposal-status.dto';
-import { WorkOrderPoDetailsDto } from './dto/work-order-po-details.dto';
-import { FinanceV2InvoiceDto } from './dto/finance-v2-invoice.dto';
-import { mergeNestedRegistrationBody } from './registration-info-normalize';
+import {
+  REGISTRATION_INFO_FILE_FIELDS,
+  createRegistrationInfoValidationPipe,
+  parseRegistrationMultipartBody,
+  registrationInfoMulterOptions,
+} from './registration-info-upload.config';
+import {
+  LaunchTrainingSessionFiles,
+  addLaunchTrainingSessionFromMultipart,
+  launchTrainingSessionUploadInterceptor,
+} from './launch-training-session-upload.config';
 
-@Controller('api/company/projects')
+@Controller(['api/company/projects', 'api/companyproject', 'api/companyprojects'])
 export class CompanyProjectsController {
   constructor(
     private readonly companyProjectsService: CompanyProjectsService,
@@ -61,7 +71,6 @@ export class CompanyProjectsController {
    * GET /api/company/projects/coordinators
    */
   @Get('coordinators')
-  @UseGuards(JwtAuthGuard, AccountStatusGuard)
   async listCoordinators(): Promise<any> {
     return this.companyProjectsService.listCoordinators();
   }
@@ -83,7 +92,7 @@ export class CompanyProjectsController {
   }
 
   /**
-   * Create a new recertification project (no project code yet; copies registration_info).
+   * Create a new recertification project (no project code yet; copies registration_info).`1Az  
    * POST /api/company/projects/:projectId/recertify
    */
   @Post(':projectId/recertify')
@@ -148,40 +157,19 @@ export class CompanyProjectsController {
   }
 
   @Get(':projectId/certificate-document')
-  @UseGuards(JwtAuthGuard, AccountStatusGuard)
   async getCertificateDocument(
-    @Request() req,
     @Param('projectId') projectId: string,
     @Res() res: Response,
   ) {
-    const project = await this.companyProjectsService.getProject(
-      req.user.userId,
-      projectId,
-    );
-
-    if (!project.certificate_document_url) {
-      throw new NotFoundException({
-        status: 'error',
-        message: 'Certificate document not found',
-      });
-    }
-
-    const filePath = join(process.cwd(), project.certificate_document_url);
-
-    if (!fs.existsSync(filePath)) {
-      throw new NotFoundException({
-        status: 'error',
-        message: 'Certificate file not found on server',
-      });
-    }
+    const file = await this.companyProjectsService.getCertificateDocumentDownloadByProjectId(projectId);
 
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader(
       'Content-Disposition',
-      `inline; filename="${project.certificate_document_filename || 'certificate.pdf'}"`,
+      `inline; filename="${file.filename}"`,
     );
 
-    return res.sendFile(filePath);
+    return res.sendFile(file.absolutePath);
   }
 
   @Get(':projectId/feedback-document')
@@ -348,76 +336,16 @@ export class CompanyProjectsController {
     );
   }
 
-  /**
-   * GET /api/company/projects/:projectId/quickview
-   * Open route (no JWT): param may be project _id or company _id — matches admin workflow-status / registration-data.
-   */
   @Get(':projectId/quickview')
-  @Header('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate')
-  @Header('Pragma', 'no-cache')
-  async getQuickview(@Param('projectId') projectId: string): Promise<any> {
-    return this.companyProjectsService.getQuickviewDataForAdmin(projectId);
-  }
-
-  /**
-   * GET /api/company/projects/:projectId/workflow-status
-   * Same next/latest step logic as quickview, smaller payload for other panels.
-   */
-  @Get(':projectId/workflow-status')
-  @UseGuards(JwtAuthGuard, AccountStatusGuard)
-  async getWorkflowStatus(
+  async getQuickview(
     @Request() req,
     @Param('projectId') projectId: string,
   ): Promise<any> {
-    return this.companyProjectsService.getWorkflowStatus(req.user.userId, projectId);
-  }
-
-  /**
-   * GET /api/company/projects/:projectId/admin/workflow-status
-   * Same as workflow-status; :projectId may be company id or project id. Open route — protect in production.
-   */
-  @Get(':projectId/admin/workflow-status')
-  async getWorkflowStatusAdmin(@Param('projectId') projectId: string): Promise<any> {
-    return this.companyProjectsService.getWorkflowStatusForAdmin(projectId);
-  }
-
-  /**
-   * PATCH /api/company/projects/:projectId/quickview-data
-   * Company panel update API for quickview-shown fields.
-   */
-  @Patch(':projectId/quickview-data')
-  @UseGuards(JwtAuthGuard, AccountStatusGuard)
-  @UsePipes(new ValidationPipe({ transform: true, whitelist: true }))
-  async updateQuickviewData(
-    @Request() req,
-    @Param('projectId') projectId: string,
-    @Body() dto: UpdateQuickviewDataDto,
-  ): Promise<any> {
-    return this.companyProjectsService.updateQuickviewData(
-      req.user.userId,
-      projectId,
-      dto,
-      false,
-    );
-  }
-
-  /**
-   * PATCH /api/company/projects/:projectId/admin/quickview-data
-   * Admin panel update API for same quickview fields.
-   */
-  @Patch(':projectId/admin/quickview-data')
-  @UseGuards(AdminJwtAuthGuard)
-  @UsePipes(new ValidationPipe({ transform: true, whitelist: true }))
-  async updateQuickviewDataAsAdmin(
-    @Param('projectId') projectId: string,
-    @Body() dto: UpdateQuickviewDataDto,
-  ): Promise<any> {
-    return this.companyProjectsService.updateQuickviewData(
-      null,
-      projectId,
-      dto,
-      true,
-    );
+    const companyId = String(req?.user?.userId || '').trim();
+    if (companyId) {
+      return this.companyProjectsService.getQuickviewData(companyId, projectId);
+    }
+    return this.companyProjectsService.getQuickviewDataPublicByProject(projectId);
   }
 
   @Post(':projectId/milestones')
@@ -435,146 +363,18 @@ export class CompanyProjectsController {
     );
   }
 
+  /**
+   * Save (first submit) or update registration form — same fields and multipart file fields as creation.
+   * POST = first save (may advance milestone 2). PUT/PATCH = update only (same merge rules, no milestone side effects).
+   */
   @Post(':projectId/registration-info')
+  @Put(':projectId/registration-info')
+  @Patch(':projectId/registration-info')
   @UseGuards(JwtAuthGuard, AccountStatusGuard)
   @UseInterceptors(
-    FileFieldsInterceptor(
-      [
-        { name: 'company_brief_profile', maxCount: 1 },
-        { name: 'brief_profile', maxCount: 1 }, // Alternative field name
-        { name: 'turnover_document', maxCount: 1 },
-        { name: 'turnover', maxCount: 1 }, // Alternative field name
-        { name: 'sez_document', maxCount: 1 },
-        { name: 'sez_input', maxCount: 1 }, // Alternative field name
-      ],
-      {
-      storage: diskStorage({
-        destination: (req, file, cb) => {
-          console.log('[File Upload Interceptor] ====== INTERCEPTOR RUNNING ======');
-          console.log('[File Upload Interceptor] Destination callback called', {
-            contentType: req.headers['content-type'],
-            fieldname: file.fieldname,
-            originalname: file.originalname,
-            mimetype: file.mimetype,
-            size: file.size,
-          });
-          const projectId = req.params.projectId;
-          const uploadPath = join(process.cwd(), 'uploads', 'registration', projectId);
-          // Create directory if it doesn't exist
-          if (!fs.existsSync(uploadPath)) {
-            fs.mkdirSync(uploadPath, { recursive: true });
-            console.log(`[File Upload] Created directory: ${uploadPath}`);
-          }
-          console.log(`[File Upload] Saving file to: ${uploadPath}`, {
-            fieldname: file.fieldname,
-            originalname: file.originalname,
-          });
-          cb(null, uploadPath);
-        },
-        filename: (req, file, cb) => {
-          // Generate unique filename: fieldname-timestamp.extension
-          const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
-          const ext = extname(file.originalname);
-          const fieldName = file.fieldname || 'file';
-          const filename = `${fieldName}-${uniqueSuffix}${ext}`;
-          console.log(`[File Upload] Generated filename: ${filename}`, {
-            originalname: file.originalname,
-            fieldname: file.fieldname,
-            extension: ext,
-          });
-          cb(null, filename);
-        },
-      }),
-      limits: {
-        fileSize: 10 * 1024 * 1024, // 10MB max file size
-      },
-      fileFilter: (req, file, cb) => {
-        console.log('[File Upload Filter] Checking file:', {
-          fieldname: file.fieldname,
-          originalname: file.originalname,
-          mimetype: file.mimetype,
-        });
-        
-        // SEZ document: PDF only. Other registration docs keep existing allowed types.
-        if (file.fieldname === 'sez_document' || file.fieldname === 'sez_input') {
-          if (file.mimetype === 'application/pdf') {
-            console.log('[File Upload Filter] SEZ file accepted:', file.originalname);
-            cb(null, true);
-          } else {
-            console.log('[File Upload Filter] SEZ file rejected - invalid type:', file.mimetype);
-            cb(new Error(`Invalid SEZ file type: ${file.mimetype}. Only PDF is allowed.`), false);
-          }
-          return;
-        }
-
-        // Allow PDF, DOC, DOCX, images
-        const allowedMimes = [
-          'application/pdf',
-          'application/msword',
-          'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-          'image/jpeg',
-          'image/png',
-          'image/jpg',
-        ];
-        
-        if (allowedMimes.includes(file.mimetype)) {
-          console.log('[File Upload Filter] File accepted:', file.originalname);
-          cb(null, true);
-        } else {
-          console.log('[File Upload Filter] File rejected - invalid type:', file.mimetype);
-          cb(new Error(`Invalid file type: ${file.mimetype}. Only PDF, DOC, DOCX, and images are allowed.`), false);
-        }
-      },
-    }),
+    FileFieldsInterceptor(REGISTRATION_INFO_FILE_FIELDS, registrationInfoMulterOptions),
   )
-  @UsePipes(
-    new ValidationPipe({
-      transform: true,
-      whitelist: true,
-      forbidNonWhitelisted: false, // CRITICAL: Allow extra fields (overrides global pipe)
-      skipMissingProperties: false,
-      transformOptions: {
-        enableImplicitConversion: true,
-      },
-      // Custom exception factory to ignore file field errors
-      exceptionFactory: (errors) => {
-        if (!errors || errors.length === 0) {
-          return null as any;
-        }
-        
-        // Filter out errors for file fields (they're handled separately via @UploadedFiles)
-        const filteredErrors = errors.filter(
-          (error) =>
-            error.property !== 'company_brief_profile' &&
-            error.property !== 'turnover_document' &&
-            error.property !== 'brief_profile' &&
-            error.property !== 'turnover' &&
-            error.property !== 'sez_document' &&
-            error.property !== 'sez_input',
-        );
-        
-        // If all errors are for file fields, ignore them completely
-        if (filteredErrors.length === 0) {
-          // Return a pass-through (no error) - file fields are handled separately
-          return null as any;
-        }
-        
-        // Return validation errors only for non-file fields
-        const formattedErrors: Record<string, string[]> = {};
-        filteredErrors.forEach((error) => {
-          if (error.constraints) {
-            formattedErrors[error.property] = Object.values(error.constraints);
-          }
-        });
-        
-        return new BadRequestException({
-          status: 'error',
-          message: 'Validation failed',
-          errors: formattedErrors,
-        });
-      },
-    }),
-  )
+  @UsePipes(createRegistrationInfoValidationPipe())
   async saveRegistrationInfo(
     @Request() req,
     @Param('projectId') projectId: string,
@@ -585,7 +385,9 @@ export class CompanyProjectsController {
       turnover_document?: Express.Multer.File[];
       turnover?: Express.Multer.File[];
       sez_document?: Express.Multer.File[];
+      sezDocument?: Express.Multer.File[];
       sez_input?: Express.Multer.File[];
+      sezinput?: Express.Multer.File[];
     },
   ): Promise<any> {
     console.log('========================================');
@@ -623,84 +425,24 @@ export class CompanyProjectsController {
       brief_profile: files?.brief_profile?.length || 0,
       turnover_document: files?.turnover_document?.length || 0,
       turnover: files?.turnover?.length || 0,
-      sez_document: files?.sez_document?.length || 0,
-      sez_input: files?.sez_input?.length || 0,
     });
     
-    // Also check req.files (Multer might put files there as fallback)
     const reqFiles = (req as any).files;
-    console.log('[Registration Info Controller] req.files (fallback):', reqFiles);
-    console.log('[Registration Info Controller] req.file (single file fallback):', (req as any).file);
-    
-    // If @UploadedFiles() is empty but req.files has data, use that instead
-    if ((!files || Object.keys(files).length === 0) && reqFiles && Object.keys(reqFiles).length > 0) {
-      console.log('[Registration Info Controller] Using req.files as fallback');
-      files = reqFiles;
-    }
-    
-    console.log('[Registration Info Controller] Final files to pass to service:', {
-      hasFiles: !!files,
-      filesKeys: files ? Object.keys(files) : [],
-    });
-
-    if (files) {
-      if (files.company_brief_profile?.[0]) {
-        console.log('[Registration Info] Company Brief Profile file:', {
-          filename: files.company_brief_profile[0].filename,
-          originalname: files.company_brief_profile[0].originalname,
-          size: files.company_brief_profile[0].size,
-          mimetype: files.company_brief_profile[0].mimetype,
-        });
-      }
-      if (files.turnover_document?.[0]) {
-        console.log('[Registration Info] Turnover Document file:', {
-          filename: files.turnover_document[0].filename,
-          originalname: files.turnover_document[0].originalname,
-          size: files.turnover_document[0].size,
-          mimetype: files.turnover_document[0].mimetype,
-        });
-      }
-    }
-
-    // Clean up body - remove empty file field objects
-    let cleanedBody = { ...body };
-    if (cleanedBody.company_brief_profile && typeof cleanedBody.company_brief_profile === 'object' && Object.keys(cleanedBody.company_brief_profile).length === 0) {
-      delete cleanedBody.company_brief_profile;
-    }
-    if (cleanedBody.turnover_document && typeof cleanedBody.turnover_document === 'object' && Object.keys(cleanedBody.turnover_document).length === 0) {
-      delete cleanedBody.turnover_document;
-    }
-    if (cleanedBody.brief_profile && typeof cleanedBody.brief_profile === 'object' && Object.keys(cleanedBody.brief_profile).length === 0) {
-      delete cleanedBody.brief_profile;
-    }
-    if (cleanedBody.turnover && typeof cleanedBody.turnover === 'object' && Object.keys(cleanedBody.turnover).length === 0) {
-      delete cleanedBody.turnover;
-    }
-    if (cleanedBody.sez_document && typeof cleanedBody.sez_document === 'object' && Object.keys(cleanedBody.sez_document).length === 0) {
-      delete cleanedBody.sez_document;
-    }
-    if (cleanedBody.sez_input && typeof cleanedBody.sez_input === 'object' && Object.keys(cleanedBody.sez_input).length === 0) {
-      delete cleanedBody.sez_input;
-    }
-
-    // Flatten nested JSON shapes: { payload: {...} }, { registration_info: {...} }, { data: {...} }
-    cleanedBody = mergeNestedRegistrationBody(cleanedBody);
-    this.validateRegistrationInfoPayload(cleanedBody);
-
-    // Convert to DTO
-    const dto = cleanedBody as RegistrationInfoDto;
+    const { dto, files: mergedFiles } = parseRegistrationMultipartBody(body, files, reqFiles);
 
     console.log('[Registration Info Controller] Calling service with:', {
-      hasFiles: !!files,
-      filesKeys: files ? Object.keys(files) : [],
-      dtoKeys: Object.keys(dto).slice(0, 5), // First 5 keys
+      hasFiles: !!mergedFiles,
+      filesKeys: mergedFiles ? Object.keys(mergedFiles) : [],
+      dtoKeys: Object.keys(dto).slice(0, 5),
     });
 
+    const isUpdate = req.method === 'PUT' || req.method === 'PATCH';
     const result = await this.companyProjectsService.saveRegistrationInfo(
       req.user.userId,
       projectId,
       dto,
-      files,
+      mergedFiles,
+      isUpdate ? { isUpdate: true, skipMilestone: true } : undefined,
     );
 
     console.log('[Registration Info Controller] Service returned:', {
@@ -709,158 +451,49 @@ export class CompanyProjectsController {
     });
 
     return result;
-  }
-
-  private pickFirst(body: Record<string, any>, keys: string[]): any {
-    for (const k of keys) {
-      if (Object.prototype.hasOwnProperty.call(body, k) && body[k] !== undefined && body[k] !== null) {
-        return body[k];
-      }
-    }
-    return undefined;
-  }
-
-  private toCleanString(v: any): string {
-    if (v === undefined || v === null) return '';
-    return String(v).trim();
-  }
-
-  private validateRegistrationInfoPayload(body: Record<string, any>): void {
-    const errors: Record<string, string[]> = {};
-    const addErr = (field: string, msg: string) => {
-      if (!errors[field]) errors[field] = [];
-      errors[field].push(msg);
-    };
-
-    const companyName = this.toCleanString(this.pickFirst(body, ['company_name', 'companyName', 'name']));
-    const email = this.toCleanString(this.pickFirst(body, ['email', 'company_email', 'companyEmail']));
-    const mobile = this.toCleanString(this.pickFirst(body, ['mobileno', 'mobile', 'company_mobile', 'companyMobile']));
-    const city = this.toCleanString(this.pickFirst(body, ['location', 'city']));
-    const state = this.toCleanString(this.pickFirst(body, ['state', 'state_id']));
-    const postalAddress = this.toCleanString(this.pickFirst(body, ['postaladdress', 'plant_address']));
-    const postalPincode = this.toCleanString(this.pickFirst(body, ['postal_address_pincode', 'plant_pincode']));
-    const billingAddress = this.toCleanString(this.pickFirst(body, ['billingaddress', 'billing_address']));
-    const billingPincode = this.toCleanString(this.pickFirst(body, ['billing_address_pincode', 'billing_pincode']));
-    const plantEmail = this.toCleanString(this.pickFirst(body, ['plant_email', 'plant_head_email']));
-    const plantContact = this.toCleanString(this.pickFirst(body, ['plant_contact_no', 'plant_head_mobile']));
-    const industry = this.toCleanString(this.pickFirst(body, ['industry', 'industry_id']));
-    const entity = this.toCleanString(this.pickFirst(body, ['entity', 'entity_id']));
-    const sector = this.toCleanString(this.pickFirst(body, ['sector', 'sector_id']));
-    const companyTypeSez = this.pickFirst(body, ['company_type_sez', 'is_sez', 'isSez']);
-    const latestTurnover = this.toCleanString(this.pickFirst(body, ['latestturnover', 'turnover']));
-    const electrical = this.toCleanString(this.pickFirst(body, ['electricalenergyconsumption']));
-    const thermal = this.toCleanString(this.pickFirst(body, ['thermalenergyconsumption']));
-    const water = this.toCleanString(this.pickFirst(body, ['waterconsumption']));
-    const tanNo = this.toCleanString(this.pickFirst(body, ['tanno', 'tan_no']));
-    const panNo = this.toCleanString(this.pickFirst(body, ['panno', 'pan_no', 'pan_number']));
-    const gstinNo = this.toCleanString(this.pickFirst(body, ['gstinno', 'gstin_no', 'gstin']));
-    const declaration = this.pickFirst(body, ['inlineCheckbox', 'declaration', 'is_declaration_accepted']);
-
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    const indianMobileRegex = /^[6-9][0-9]{9}$/;
-    const cityRegex = /^[A-Za-z ]+$/;
-    const indianPincodeRegex = /^[1-9][0-9]{5}$/;
-    const decimalTwoRegex = /^\d+(\.\d{1,2})?$/;
-    const tanRegex = /^[A-Z]{4}[0-9]{5}[A-Z]$/;
-    const panRegex = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
-    const gstRegex = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/;
-    const hasDoubleSpaces = (s: string) => /\s{2,}/.test(s);
-
-    if (!companyName) addErr('company_name', 'Company name is required');
-    else {
-      if (companyName.length < 3 || companyName.length > 50) addErr('company_name', 'Company name must be between 3 and 50 characters');
-      if (hasDoubleSpaces(companyName)) addErr('company_name', 'Company name cannot contain multiple consecutive spaces');
-    }
-
-    if (!email) addErr('email', 'Email is required');
-    else if (!emailRegex.test(email)) addErr('email', 'Email format is invalid');
-
-    // Some clients don't post company mobile on edit/update calls; validate format only when provided.
-    if (mobile && !indianMobileRegex.test(mobile)) {
-      addErr('mobileno', 'Mobile number must be a valid 10-digit Indian number');
-    }
-
-    if (!city) addErr('location', 'City is required');
-    else {
-      if (city.length < 3 || city.length > 50) addErr('location', 'City must be between 3 and 50 characters');
-      if (!cityRegex.test(city)) addErr('location', 'City can contain only letters and spaces');
-      if (hasDoubleSpaces(city)) addErr('location', 'City cannot contain multiple consecutive spaces');
-    }
-
-    if (!state) addErr('state', 'State is required');
-
-    if (!postalAddress) addErr('postaladdress', 'Postal address is required');
-    else if (postalAddress.length < 10 || postalAddress.length > 150) addErr('postaladdress', 'Postal address must be between 10 and 150 characters');
-
-    if (!postalPincode) addErr('postal_address_pincode', 'Postal address pincode is required');
-    else if (!indianPincodeRegex.test(postalPincode)) addErr('postal_address_pincode', 'Postal address pincode must be a valid 6-digit Indian pincode');
-
-    if (!billingAddress) addErr('billingaddress', 'Billing address is required');
-    else if (billingAddress.length < 10 || billingAddress.length > 150) addErr('billingaddress', 'Billing address must be between 10 and 150 characters');
-
-    if (!billingPincode) addErr('billing_address_pincode', 'Billing address pincode is required');
-    else if (!indianPincodeRegex.test(billingPincode)) addErr('billing_address_pincode', 'Billing address pincode must be a valid 6-digit Indian pincode');
-
-    if (!plantEmail) addErr('plant_email', 'Plant email is required');
-    else if (!emailRegex.test(plantEmail)) addErr('plant_email', 'Plant email format is invalid');
-
-    if (!plantContact) addErr('plant_contact_no', 'Plant contact number is required');
-    else if (!indianMobileRegex.test(plantContact)) addErr('plant_contact_no', 'Plant contact number must be a valid 10-digit Indian number');
-
-    if (!industry) addErr('industry', 'Industry is required');
-    if (!entity) addErr('entity', 'Entity is required');
-    if (!sector) addErr('sector', 'Sector is required');
-
-    if (companyTypeSez === undefined || companyTypeSez === null || String(companyTypeSez).trim() === '') {
-      addErr('company_type_sez', 'Company type SEZ is required');
-    }
-
-    if (!latestTurnover) addErr('latestturnover', 'Latest turnover is required');
-    else if (!decimalTwoRegex.test(latestTurnover)) addErr('latestturnover', 'Latest turnover must be a valid number with up to 2 decimal places');
-
-    if (electrical && !decimalTwoRegex.test(electrical)) {
-      addErr('electricalenergyconsumption', 'Electrical energy consumption must be a valid number with up to 2 decimal places');
-    }
-
-    if (thermal && !decimalTwoRegex.test(thermal)) {
-      addErr('thermalenergyconsumption', 'Thermal energy consumption must be a valid number with up to 2 decimal places');
-    }
-
-    if (water && !decimalTwoRegex.test(water)) {
-      addErr('waterconsumption', 'Water consumption must be a valid number with up to 2 decimal places');
-    }
-
-    if (!tanNo) addErr('tanno', 'TAN number is required');
-    else if (!tanRegex.test(tanNo.toUpperCase())) addErr('tanno', 'TAN number format is invalid');
-
-    if (!panNo) addErr('panno', 'PAN number is required');
-    else if (!panRegex.test(panNo.toUpperCase())) addErr('panno', 'PAN number format is invalid');
-
-    if (!gstinNo) addErr('gstinno', 'GSTIN number is required');
-    else if (!gstRegex.test(gstinNo.toUpperCase())) addErr('gstinno', 'GSTIN number format is invalid');
-
-    const declarationAccepted =
-      declaration === true ||
-      declaration === 1 ||
-      declaration === '1' ||
-      String(declaration).toLowerCase() === 'true' ||
-      String(declaration).toLowerCase() === 'on' ||
-      String(declaration).toLowerCase() === 'yes';
-    // Allow update calls that don't resend checkbox; enforce only when declaration field is posted.
-    if (declaration !== undefined && declaration !== null && !declarationAccepted) {
-      addErr('inlineCheckbox', 'Declaration is required');
-    }
-
-    if (Object.keys(errors).length > 0) {
-      throw new BadRequestException({
-        status: 'error',
-        message: 'Validation failed',
-        errors,
-      });
-    }
+  }   /**
+   * Facilitator-only registration flow endpoint (keeps existing /registration-info unchanged).
+   * Supports company_brief_profile upload via multipart/form-data.
+   */
+  @Post(':projectId/facilitator-registration-info')
+  @Put(':projectId/facilitator-registration-info')
+  @Patch(':projectId/facilitator-registration-info')
+  @UseGuards(JwtAuthGuard, AccountStatusGuard)
+  @UseInterceptors(
+    FileFieldsInterceptor(REGISTRATION_INFO_FILE_FIELDS, registrationInfoMulterOptions),
+  )
+  @UsePipes(createRegistrationInfoValidationPipe())
+  async saveFacilitatorRegistrationInfo(
+    @Request() req,
+    @Param('projectId') projectId: string,
+    @Body() body: any,
+    @UploadedFiles() files?: {
+      company_brief_profile?: Express.Multer.File[];
+      brief_profile?: Express.Multer.File[];
+      turnover_document?: Express.Multer.File[];
+      turnover?: Express.Multer.File[];
+      sez_document?: Express.Multer.File[];
+      sezDocument?: Express.Multer.File[];
+      sez_input?: Express.Multer.File[];
+      sezinput?: Express.Multer.File[];
+    },
+  ): Promise<any> {
+    const reqFiles = (req as any).files;
+    const { dto, files: mergedFiles } = parseRegistrationMultipartBody(body, files, reqFiles);
+    const isUpdate = req.method === 'PUT' || req.method === 'PATCH';
+    return this.companyProjectsService.saveFacilitatorRegistrationInfo(
+      req.user.userId,
+      projectId,
+      dto,
+      mergedFiles,
+      isUpdate ? { isUpdate: true, skipMilestone: true } : undefined,
+    );
   }
 
   @Get(':projectId/registration-info')
+  @Header('Cache-Control', 'no-store, no-cache, must-revalidate, private')
+  @Header('Pragma', 'no-cache')
+  @Header('Expires', '0')
   @UseGuards(JwtAuthGuard, AccountStatusGuard)
   async getRegistrationInfo(
     @Request() req,
@@ -872,107 +505,172 @@ export class CompanyProjectsController {
     );
   }
 
-  /**
-   * GET /api/company/projects/:projectId/registration-data
-   * Alias for registration-info, returns saved registration form + masters.
-   */
-  @Get(':projectId/registration-data')
-  @UseGuards(JwtAuthGuard, AccountStatusGuard)
-  async getRegistrationData(
-    @Request() req,
+  @Get(':projectId/facilitator-registration-info')
+  @Header('Cache-Control', 'no-store, no-cache, must-revalidate, private')
+  @Header('Pragma', 'no-cache')
+  @Header('Expires', '0')
+  async getFacilitatorRegistrationInfo(
     @Param('projectId') projectId: string,
   ): Promise<any> {
-    return this.companyProjectsService.getRegistrationInfo(
-      req.user.userId,
+    return this.companyProjectsService.getFacilitatorRegistrationInfoByProjectId(
       projectId,
     );
   }
 
   /**
+   * Admin-safe alias to fetch registration info by project id.
    * GET /api/company/projects/:projectId/admin/registration-data
-   * Registration payload + masters. Param may be project _id **or** company _id
-   * (same id as GET registered-companies `items[].id`).
-   * No auth guard: open for local/admin tooling; do not expose publicly without a reverse proxy rule.
    */
   @Get(':projectId/admin/registration-data')
-  async getAdminRegistrationData(@Param('projectId') projectId: string): Promise<any> {
+  @Header('Cache-Control', 'no-store, no-cache, must-revalidate, private')
+  @Header('Pragma', 'no-cache')
+  @Header('Expires', '0')
+  async getRegistrationInfoForAdminAlias(
+    @Param('projectId') projectId: string,
+  ): Promise<any> {
     return this.companyProjectsService.getRegistrationInfoForAdmin(projectId);
   }
 
-  @Get(':projectId/registration-files/:fileType')
-  @UseGuards(JwtAuthGuard, AccountStatusGuard)
-  async getRegistrationFile(
+  /**
+   * Admin: update registration form (same multipart fields as company POST).
+   * PUT/PATCH /api/company/projects/:projectId/admin/registration-data
+   */
+  @Put(':projectId/admin/registration-data')
+  @Patch(':projectId/admin/registration-data')
+  @UseInterceptors(
+    FileFieldsInterceptor(REGISTRATION_INFO_FILE_FIELDS, registrationInfoMulterOptions),
+  )
+  @UsePipes(createRegistrationInfoValidationPipe())
+  async updateRegistrationInfoForAdmin(
     @Request() req,
+    @Param('projectId') projectId: string,
+    @Body() body: any,
+    @UploadedFiles() files?: {
+      company_brief_profile?: Express.Multer.File[];
+      brief_profile?: Express.Multer.File[];
+      turnover_document?: Express.Multer.File[];
+      turnover?: Express.Multer.File[];
+      sez_document?: Express.Multer.File[];
+      sezDocument?: Express.Multer.File[];
+      sez_input?: Express.Multer.File[];
+      sezinput?: Express.Multer.File[];
+    },
+  ): Promise<any> {
+    const reqFiles = (req as any).files;
+    const { dto, files: mergedFiles } = parseRegistrationMultipartBody(body, files, reqFiles);
+    return this.companyProjectsService.updateRegistrationInfoForAdmin(projectId, dto, mergedFiles);
+  }
+
+  @Get(':projectId/registration-files/:fileType')
+  async getRegistrationFile(
     @Param('projectId') projectId: string,
     @Param('fileType') fileType: string,
     @Res() res: Response,
   ) {
-    const project = await this.companyProjectsService.getProject(
-      req.user.userId,
-      projectId,
+    const project = await this.companyProjectsService.getProjectForRegistrationFile(projectId);
+
+    const download = await this.companyProjectsService.resolveRegistrationFileDownload(
+      project.registration_info,
+      fileType,
     );
-
-    const registrationInfo = project.registration_info || {};
-    let filePath: string | null = null;
-    let filename: string = 'file';
-
-    if (fileType === 'company-brief-profile' || fileType === 'brief-profile') {
-      filePath = registrationInfo.company_brief_profile_url;
-      filename = registrationInfo.company_brief_profile_filename || 'company_brief_profile';
-    } else if (fileType === 'turnover-document' || fileType === 'turnover') {
-      filePath = registrationInfo.turnover_document_url;
-      filename = registrationInfo.turnover_document_filename || 'turnover_document';
-    } else if (fileType === 'sez-document' || fileType === 'sez-input' || fileType === 'sez') {
-      filePath = registrationInfo.sez_document_url;
-      filename = registrationInfo.sez_document_filename || 'sez_document.pdf';
-    }
-
-    if (!filePath) {
-      throw new NotFoundException({
-        status: 'error',
-        message: 'File not found',
-      });
-    }
-
-    // Extract relative path from URL if it's a full URL
-    const relativePath = filePath.startsWith('http')
-      ? filePath.replace(/^https?:\/\/[^/]+/, '').replace(/^\//, '')
-      : filePath;
-
-    const fullPath = join(process.cwd(), relativePath);
-
-    if (!fs.existsSync(fullPath)) {
-      throw new NotFoundException({
-        status: 'error',
-        message: 'File not found on server',
-      });
-    }
-
-    // Determine content type based on file extension
-    const ext = extname(filename).toLowerCase();
-    const contentTypes: Record<string, string> = {
-      '.pdf': 'application/pdf',
-      '.doc': 'application/msword',
-      '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-      '.jpg': 'image/jpeg',
-      '.jpeg': 'image/jpeg',
-      '.png': 'image/png',
-    };
-
-    res.setHeader('Content-Type', contentTypes[ext] || 'application/octet-stream');
-    res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
-
-    return res.sendFile(fullPath);
+    await this.companyProjectsService.streamRegistrationFileToResponse(res, download);
   }
 
   /**
-   * Upload Proposal Document (Admin function - can be called directly or via MongoDB)
+   * **Proposal reupload (CII)** — allowed when there is **no** work-order row, WO **status is unset**, or latest WO is **rejected** (`wo_status = 2`). Same flags as `proposal_reupload_path` / `can_replace_proposal` on GET combined/proposal-document.
+   *
+   * **Client flow**
+   * 1. `POST|PUT|PATCH` this URL with `multipart/form-data` and field `proposal_document` | `proposalDocument` | `file` (PDF).
+   * 2. `response.data` is **proposal-only** (no `work_order` root or inside `proposal_workorder_documents`). For WO + proposal together, `GET …/proposal-workorder-documents/refresh`.
+   * 3. Optional refetch: `GET …/proposal-workorder-documents/refresh` with `cache: 'no-store'`.
+   *
+   * Same multipart rules as `POST …/proposal-document` (first upload).
+   * POST|PUT|PATCH …/proposal-document/reupload
+   */
+  @Post(':projectId/proposal-document/reupload')
+  @Put(':projectId/proposal-document/reupload')
+  @Patch(':projectId/proposal-document/reupload')
+  @Header('Cache-Control', 'no-store, no-cache, must-revalidate, private')
+  @UseInterceptors(
+    FileFieldsInterceptor(
+      [
+        { name: 'proposal_document', maxCount: 1 },
+        { name: 'proposalDocument', maxCount: 1 },
+        { name: 'file', maxCount: 1 },
+      ],
+      {
+        storage: diskStorage({
+          destination: (req, file, cb) => {
+            const projectId = req.params.projectId;
+            const uploadPath = join(process.cwd(), 'uploads', 'company', projectId);
+            if (!fs.existsSync(uploadPath)) {
+              fs.mkdirSync(uploadPath, { recursive: true });
+              console.log(`[Proposal Document Reupload] Created directory: ${uploadPath}`);
+            }
+            cb(null, uploadPath);
+          },
+          filename: (req, file, cb) => {
+            const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
+            const ext = extname(file.originalname);
+            const filename = `proposal-${uniqueSuffix}${ext}`;
+            cb(null, filename);
+          },
+        }),
+        limits: {
+          fileSize: 10 * 1024 * 1024,
+        },
+        fileFilter: (req, file, cb) => {
+          const isPdfMime = file.mimetype === 'application/pdf';
+          const isPdfExt = extname(file.originalname || '').toLowerCase() === '.pdf';
+          if (isPdfMime && isPdfExt) {
+            cb(null, true);
+            return;
+          }
+          cb(new Error('Invalid file type. Only PDF is allowed.'), false);
+        },
+      },
+    ),
+  )
+  async replaceProposalDocument(
+    @Param('projectId') projectId: string,
+    @UploadedFiles()
+    files?: {
+      proposal_document?: Express.Multer.File[];
+      proposalDocument?: Express.Multer.File[];
+      file?: Express.Multer.File[];
+    },
+  ): Promise<any> {
+    const file =
+      files?.proposal_document?.[0] ||
+      files?.proposalDocument?.[0] ||
+      files?.file?.[0];
+    if (!file) {
+      throw new BadRequestException({
+        status: 'error',
+        message: 'No file uploaded. Use proposal_document, proposalDocument, or file.',
+      });
+    }
+    return this.companyProjectsService.replaceProposalDocumentByProjectId(projectId, file);
+  }
+
+  /**
+   * Upload Proposal Document (Admin function - can be called directly or via MongoDB).
+   * Response includes merged GET …/proposal-document fields and `data.proposal_document` (same shape as proposal-workorder-documents).
    * POST /api/company/projects/:projectId/proposal-document
    */
   @Post(':projectId/proposal-document')
-  @UseGuards(AdminJwtAuthGuard)
+  @Put(':projectId/proposal-document')
+  @Patch(':projectId/proposal-document')
+  @UseGuards()
+  @Header('Cache-Control', 'no-store, no-cache, must-revalidate, private')
   @UseInterceptors(
-    FileInterceptor('proposal_document', {
+    FileFieldsInterceptor(
+      [
+        { name: 'proposal_document', maxCount: 1 },
+        { name: 'proposalDocument', maxCount: 1 },
+        { name: 'file', maxCount: 1 },
+      ],
+      {
       storage: diskStorage({
         destination: (req, file, cb) => {
           const projectId = req.params.projectId;
@@ -996,27 +694,35 @@ export class CompanyProjectsController {
         fileSize: 10 * 1024 * 1024, // 10MB max file size
       },
       fileFilter: (req, file, cb) => {
-        const allowedMimes = [
-          'application/pdf',
-          'application/msword',
-          'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-        ];
-        if (allowedMimes.includes(file.mimetype)) {
+        const isPdfMime = file.mimetype === 'application/pdf';
+        const isPdfExt = extname(file.originalname || '').toLowerCase() === '.pdf';
+        if (isPdfMime && isPdfExt) {
           cb(null, true);
-        } else {
-          cb(new Error('Invalid file type. Only PDF, DOC, DOCX are allowed.'), false);
+          return;
         }
+        cb(new Error('Invalid file type. Only PDF is allowed.'), false);
       },
-    }),
+      },
+    ),
   )
   async uploadProposalDocument(
     @Param('projectId') projectId: string,
-    @UploadedFile() file: Express.Multer.File,
+    @UploadedFiles()
+    files?: {
+      proposal_document?: Express.Multer.File[];
+      proposalDocument?: Express.Multer.File[];
+      file?: Express.Multer.File[];
+    },
   ): Promise<any> {
+    const file =
+      files?.proposal_document?.[0] ||
+      files?.proposalDocument?.[0] ||
+      files?.file?.[0];
+
     if (!file) {
       throw new BadRequestException({
         status: 'error',
-        message: 'No file uploaded',
+        message: 'No file uploaded. Use proposal_document, proposalDocument, or file.',
       });
     }
 
@@ -1026,205 +732,46 @@ export class CompanyProjectsController {
       size: file.size,
     });
 
-    return this.companyProjectsService.uploadProposalDocumentForAdmin(projectId, file);
+    return this.companyProjectsService.uploadProposalDocumentByProjectId(projectId, file);
   }
 
   /**
-   * Upload Proposal Document (Admin upload responsibility).
-   * POST /api/company/projects/:projectId/admin/proposal-document
+   * Same payload as GET proposal-document; JSON response is marked no-store for clients refreshing after reupload.
+   * GET /api/company/projects/:projectId/proposal-document/reload
    */
-  @Post(':projectId/admin/proposal-document')
-  @UseGuards(AdminJwtAuthGuard)
-  @UseInterceptors(
-    FileInterceptor('proposal_document', {
-      storage: diskStorage({
-        destination: (req, file, cb) => {
-          const projectId = req.params.projectId;
-          const uploadPath = join(process.cwd(), 'uploads', 'company', projectId);
-          if (!fs.existsSync(uploadPath)) {
-            fs.mkdirSync(uploadPath, { recursive: true });
-          }
-          cb(null, uploadPath);
-        },
-        filename: (req, file, cb) => {
-          const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
-          const ext = extname(file.originalname);
-          cb(null, `proposal-${uniqueSuffix}${ext}`);
-        },
-      }),
-      limits: { fileSize: 10 * 1024 * 1024 },
-      fileFilter: (req, file, cb) => {
-        const allowedMimes = [
-          'application/pdf',
-          'application/msword',
-          'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-        ];
-        if (allowedMimes.includes(file.mimetype)) cb(null, true);
-        else cb(new Error('Invalid file type. Only PDF, DOC, DOCX are allowed.'), false);
-      },
-    }),
-  )
-  async uploadProposalDocumentAsAdmin(
-    @Param('projectId') projectId: string,
-    @UploadedFile() file: Express.Multer.File,
-  ): Promise<any> {
-    if (!file) {
-      throw new BadRequestException({
-        status: 'error',
-        message: 'No file uploaded',
-      });
-    }
-    return this.companyProjectsService.uploadProposalDocumentForAdmin(projectId, file);
+  @Get(':projectId/proposal-document/reload')
+  @Header('Cache-Control', 'no-store, no-cache, must-revalidate, private')
+  async reloadProposalDocumentState(@Param('projectId') projectId: string): Promise<any> {
+    return this.companyProjectsService.getProposalDocumentByProjectId(projectId);
   }
 
   /**
-   * Admin: form defaults + saved PO fields (after WO approved, before project code).
-   * Includes wo_status and wo_remarks from the latest work order (e.g. rejection reason).
-   * GET /api/company/projects/:projectId/admin/work-order-po
-   */
-  @Get(':projectId/admin/work-order-po')
-  @UseGuards(AdminJwtAuthGuard)
-  async getWorkOrderPoAdmin(@Param('projectId') projectId: string): Promise<any> {
-    return this.companyProjectsService.getWorkOrderPoAdminFormForAdmin(projectId);
-  }
-
-  /**
-   * Admin: save PO number + acceptance date (not in the future). Required before project code if WO was approved.
-   * PATCH /api/company/projects/:projectId/admin/work-order-po
-   */
-  @Patch(':projectId/admin/work-order-po')
-  @UseGuards(AdminJwtAuthGuard)
-  @UsePipes(new ValidationPipe({ transform: true, whitelist: true }))
-  async patchWorkOrderPoAdmin(
-    @Param('projectId') projectId: string,
-    @Body() dto: WorkOrderPoDetailsDto,
-  ): Promise<any> {
-    return this.companyProjectsService.saveWorkOrderPoDetailsForAdmin(projectId, dto);
-  }
-
-  /**
-   * Admin: create project code (same rules as company route + PO gate when WO approved).
-   * POST /api/company/projects/:projectId/admin/project-code
-   */
-  @Post(':projectId/admin/project-code')
-  @UseGuards(AdminJwtAuthGuard)
-  @UsePipes(new ValidationPipe({ transform: true, whitelist: true }))
-  async createProjectCodeAdmin(
-    @Param('projectId') projectId: string,
-    @Body() dto: CreateProjectCodeDto,
-  ): Promise<any> {
-    return this.companyProjectsService.createProjectCodeForAdmin(projectId, dto.project_id);
-  }
-
-  /**
-   * Company accepts/rejects proposal document.
-   * POST /api/company/projects/:projectId/proposal/approval
-   */
-  @Post(':projectId/proposal/approval')
-  @UseGuards(JwtAuthGuard, AccountStatusGuard)
-  @UsePipes(new ValidationPipe({ transform: true, whitelist: true }))
-  async reviewProposalDocument(
-    @Request() req,
-    @Param('projectId') projectId: string,
-    @Body() dto: ReviewProposalDto,
-  ): Promise<any> {
-    if (dto.proposal_status === 2 && !dto.proposal_remarks) {
-      throw new BadRequestException({
-        status: 'error',
-        message: 'Remarks are required when rejecting proposal',
-      });
-    }
-    return this.companyProjectsService.reviewProposalDocument(
-      req.user.userId,
-      projectId,
-      dto,
-    );
-  }
-
-  /**
-   * Company updates proposal decision with string status.
-   * PATCH /api/company/projects/:projectId/proposal-document/status
-   * Body: { status: "accepted" | "rejected", remarks?: string }
-   */
-  @Patch(':projectId/proposal-document/status')
-  @UseGuards(JwtAuthGuard, AccountStatusGuard)
-  @UsePipes(new ValidationPipe({ transform: true, whitelist: true }))
-  async updateProposalStatus(
-    @Request() req,
-    @Param('projectId') projectId: string,
-    @Body() dto: UpdateProposalStatusDto,
-  ): Promise<any> {
-    if (dto.status === 'rejected' && !dto.remarks) {
-      throw new BadRequestException({
-        status: 'error',
-        message: 'Remarks are required when rejecting proposal',
-      });
-    }
-    return this.companyProjectsService.reviewProposalDocument(
-      req.user.userId,
-      projectId,
-      {
-        proposal_status: dto.status === 'accepted' ? 1 : 2,
-        proposal_remarks: dto.remarks,
-      },
-    );
-  }
-
-  /**
-   * Proposal PDF metadata only (no `work_order` object). For iframe/PDF viewer + cache bust.
+   * Proposal PDF metadata only (no `work_order` object). Use this when you only care about the document after upload/reupload.
    * GET /api/company/projects/:projectId/proposal-document/document
-   * `reupload_allowed`: true when latest work order was rejected by CII (`wo_status === 2`).
    */
   @Get(':projectId/proposal-document/document')
-  @UseGuards(JwtAuthGuard, AccountStatusGuard)
-  async getProposalDocumentFileInfo(
-    @Request() req,
-    @Param('projectId') projectId: string,
-  ): Promise<any> {
-    return this.companyProjectsService.getProposalDocumentFileInfo(req.user.userId, projectId);
+  async getProposalDocumentFileInfo(@Param('projectId') projectId: string): Promise<any> {
+    return this.companyProjectsService.getProposalDocumentFileInfoByProjectId(projectId);
   }
 
   /**
-   * Stream proposal PDF (company). Use `document_url` from GET …/proposal-document/document (`?v=` cache bust).
-   * GET /api/company/projects/:projectId/proposal-document/file
-   */
-  @Get(':projectId/proposal-document/file')
-  @UseGuards(JwtAuthGuard, AccountStatusGuard)
-  async getProposalDocumentFile(
-    @Request() req,
-    @Param('projectId') projectId: string,
-    @Query('v') _cacheBust: string | undefined,
-    @Res() res: Response,
-  ): Promise<void> {
-    const { fullPath, filename, ext } =
-      await this.companyProjectsService.getProposalDocumentLocalFilePathOrThrow(
-        req.user.userId,
-        projectId,
-      );
-    const contentTypes: Record<string, string> = {
-      '.pdf': 'application/pdf',
-      '.doc': 'application/msword',
-      '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-    };
-    res.setHeader('Content-Type', contentTypes[ext] || 'application/octet-stream');
-    res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
-    res.sendFile(fullPath);
-  }
-
-  /**
-   * Get Proposal Document
+   * Get proposal metadata (view URL, status, work order summary; can_replace_proposal when latest WO is rejected).
    * GET /api/company/projects/:projectId/proposal-document
    */
   @Get(':projectId/proposal-document')
-  @UseGuards(JwtAuthGuard, AccountStatusGuard)
+  @Header('Cache-Control', 'no-store, no-cache, must-revalidate, private')
   async getProposalDocument(
-    @Request() req,
     @Param('projectId') projectId: string,
   ): Promise<any> {
-    return this.companyProjectsService.getProposalDocument(
-      req.user.userId,
-      projectId,
-    );
+    return this.companyProjectsService.getProposalDocumentByProjectId(projectId);
+  }
+
+  @Get(':projectId/proposal-document/file')
+  async viewProposalDocument(
+    @Param('projectId') projectId: string,
+    @Res() res: Response,
+  ): Promise<void> {
+    await this.companyProjectsService.streamProposalDocumentByProjectId(projectId, res);
   }
 
   /**
@@ -1361,36 +908,27 @@ export class CompanyProjectsController {
   }
 
   /**
-   * Frontend alias: same JSON as proposal-workorder-documents (refresh hint in path only).
-   * GET /api/company/projects/:projectId/proposal-work-order-documents/refresh
+   * **Refetch after proposal upload/reupload** — same body as `GET …/proposal-workorder-documents`, dedicated URL for dashboards (`useProposalRefresh()`).
+   * Use `response.data.proposal_document` for proposal-only state; `data.work_order` for WO. Headers: `no-store`.
+   * GET /api/company/projects/:projectId/proposal-workorder-documents/refresh
    */
-  @Get(':projectId/proposal-work-order-documents/refresh')
-  async getProposalWorkOrderDocumentsRefresh(@Param('projectId') projectId: string): Promise<any> {
-    return this.companyProjectsService.getProposalWorkOrderDocumentsForAdmin(projectId);
+  @Get(':projectId/proposal-workorder-documents/refresh')
+  @Header('Cache-Control', 'no-store, no-cache, must-revalidate, private')
+  async refreshProposalWorkOrderDocuments(@Param('projectId') projectId: string): Promise<any> {
+    return this.companyProjectsService.getProposalWorkOrderDocumentsByProjectId(projectId);
   }
 
   /**
-   * Get Proposal/Work Order Documents (combined endpoint)
+   * Get Proposal/Work Order Documents (combined endpoint).
+   * When `proposal_badge_label` is `"Rejected by company"`, `proposal_reupload_path` is set — use POST|PUT|PATCH there for the single proposal reupload API.
    * GET /api/company/projects/:projectId/proposal-workorder-documents
-   *
-   * Open route (no company JWT): same id resolution as quickview — `:projectId` may be project _id or company _id.
-   * Lets admin dashboard load this page without a company Bearer token.
    */
   @Get(':projectId/proposal-workorder-documents')
-  async getProposalWorkOrderDocuments(@Param('projectId') projectId: string): Promise<any> {
-    return this.companyProjectsService.getProposalWorkOrderDocumentsForAdmin(projectId);
-  }
-
-  /**
-   * Admin: identical JSON to GET .../proposal-workorder-documents; requires admin JWT.
-   * `:projectId` may be project _id or company _id.
-   */
-  @Get(':projectId/admin/proposal-workorder-documents')
-  @UseGuards(AdminJwtAuthGuard)
-  async getProposalWorkOrderDocumentsAdmin(
+  @Header('Cache-Control', 'no-store, no-cache, must-revalidate, private')
+  async getProposalWorkOrderDocuments(
     @Param('projectId') projectId: string,
   ): Promise<any> {
-    return this.companyProjectsService.getProposalWorkOrderDocumentsForAdmin(projectId);
+    return this.companyProjectsService.getProposalWorkOrderDocumentsByProjectId(projectId);
   }
 
   /**
@@ -1426,12 +964,8 @@ export class CompanyProjectsController {
   }
 
   /**
-   * Get Launch And Training – up to 4 sessions, read-only for company.
+   * Get Launch And Training (Site Visit Report) – consultant/company page data.
    * GET /api/company/projects/:projectId/launch-and-training
-   *
-   * `data.sessions`: uploaded sessions (document_url, document_filename, session_date, uploaded_at, session_index).
-   * `data.launch_training_document` / `launch_training_report_date`: first session or legacy (older UIs).
-   * Also: sessions_count, max_sessions (4), coordinator_assigned, section_available, legacy_single.
    */
   @Get(':projectId/launch-and-training')
   @UseGuards(JwtAuthGuard, AccountStatusGuard)
@@ -1446,128 +980,59 @@ export class CompanyProjectsController {
   }
 
   /**
-   * Admin: same GET as company; projectId may be company _id or project _id.
-   * GET /api/company/projects/:projectId/admin/launch-and-training
-   *
-   * Prefer dashboard route: GET /api/admin/projects/:projectId/launch-training-program (includes id_resolution).
+   * Launch & Training Program — same payload as `/api/admin/projects/.../launch-training`.
+   * Some admin UIs call the **company** API base (`/api/company/projects/...`); without these aliases, POST returns 404.
    */
-  @Get(':projectId/admin/launch-and-training')
-  @UseGuards(AdminJwtAuthGuard)
-  async getLaunchAndTrainingAdmin(@Param('projectId') projectId: string): Promise<any> {
-    return this.companyProjectsService.getLaunchAndTrainingForAdmin(projectId);
+  @Get(':projectId/launch-training')
+  async getLaunchTrainingCompanyApiAlias(
+    @Param('projectId') projectId: string,
+  ): Promise<any> {
+    return this.companyProjectsService.getLaunchTrainingProgramForAdmin(projectId);
   }
 
-  /**
-   * Add/replace Launch & Training session 1–4 (PDF). Requires coordinator assigned.
-   * POST /api/company/projects/:projectId/launch-and-training/sessions
-   * Multipart: launch_upload (file), session_index (1–4), session_date (optional).
-   */
-  @Post(':projectId/launch-and-training/sessions')
-  @UseGuards(JwtAuthGuard, AccountStatusGuard)
-  @UseInterceptors(
-    FileInterceptor('launch_upload', {
-      storage: diskStorage({
-        destination: (req, file, cb) => {
-          const companyId = (req as any).user?.userId;
-          if (!companyId) {
-            cb(new Error('Unauthorized'), '');
-            return;
-          }
-          const uploadPath = join(
-            process.cwd(),
-            'uploads',
-            'companyproject',
-            'launchAndTraining',
-            companyId,
-          );
-          if (!fs.existsSync(uploadPath)) {
-            fs.mkdirSync(uploadPath, { recursive: true });
-          }
-          cb(null, uploadPath);
-        },
-        filename: (req, file, cb) => {
-          const now = new Date();
-          const ymdhis =
-            now.getFullYear() +
-            String(now.getMonth() + 1).padStart(2, '0') +
-            String(now.getDate()).padStart(2, '0') +
-            String(now.getHours()).padStart(2, '0') +
-            String(now.getMinutes()).padStart(2, '0') +
-            String(now.getSeconds()).padStart(2, '0');
-          const filename = `${ymdhis}_${file.originalname}`;
-          cb(null, filename);
-        },
-      }),
-      limits: { fileSize: 10 * 1024 * 1024 },
-      fileFilter: (req, file, cb) => {
-        if (file.mimetype === 'application/pdf') {
-          cb(null, true);
-        } else {
-          cb(new Error('Invalid file type. Only PDF files are allowed.'), false);
-        }
-      },
-    }),
-  )
-  @UsePipes(new ValidationPipe({ whitelist: true, transform: true }))
-  async addLaunchTrainingSession(
-    @Request() req,
+  @Get(':projectId/launch-training-program')
+  async getLaunchTrainingProgramCompanyApiAlias(
     @Param('projectId') projectId: string,
-    @UploadedFile() file: Express.Multer.File,
-    @Body() dto: AddLaunchTrainingSessionDto,
   ): Promise<any> {
-    if (!file) {
-      throw new BadRequestException({
-        status: 'error',
-        message: 'No file uploaded. Please select a PDF file (launch_upload).',
-      });
-    }
-    return this.companyProjectsService.addLaunchTrainingSession(
-      req.user.userId,
+    return this.companyProjectsService.getLaunchTrainingProgramForAdmin(projectId);
+  }
+
+  @Post(':projectId/launch-training-sessions')
+  @UseInterceptors(launchTrainingSessionUploadInterceptor())
+  @UsePipes(new ValidationPipe({ transform: true, whitelist: true }))
+  async postLaunchTrainingSessionsCompanyAlias(
+    @Param('projectId') projectId: string,
+    @Body() dto: UploadLaunchAndTrainingDto,
+    @UploadedFiles() files?: LaunchTrainingSessionFiles,
+  ): Promise<any> {
+    return addLaunchTrainingSessionFromMultipart(
+      this.companyProjectsService,
       projectId,
-      file,
       dto,
+      files,
     );
   }
 
-  /**
-   * Admin: add/replace Launch & Training session (resolved company + project like other admin routes).
-   * POST /api/company/projects/:projectId/admin/launch-and-training/sessions
-   */
-  @Post(':projectId/admin/launch-and-training/sessions')
-  @UseGuards(AdminJwtAuthGuard)
-  @UseInterceptors(
-    FileInterceptor('launch_upload', {
-      storage: memoryStorage(),
-      limits: { fileSize: 10 * 1024 * 1024 },
-      fileFilter: (req, file, cb) => {
-        if (file.mimetype === 'application/pdf') {
-          cb(null, true);
-        } else {
-          cb(new Error('Invalid file type. Only PDF files are allowed.'), false);
-        }
-      },
-    }),
-  )
-  @UsePipes(new ValidationPipe({ whitelist: true, transform: true }))
-  async addLaunchTrainingSessionAdmin(
+  @Post(':projectId/launch-training')
+  @UseInterceptors(launchTrainingSessionUploadInterceptor())
+  @UsePipes(new ValidationPipe({ transform: true, whitelist: true }))
+  async postLaunchTrainingCompanyAlias(
     @Param('projectId') projectId: string,
-    @UploadedFile() file: Express.Multer.File,
-    @Body() dto: AddLaunchTrainingSessionDto,
+    @Body() dto: UploadLaunchAndTrainingDto,
+    @UploadedFiles() files?: LaunchTrainingSessionFiles,
   ): Promise<any> {
-    if (!file) {
-      throw new BadRequestException({
-        status: 'error',
-        message: 'No file uploaded. Please select a PDF file (launch_upload).',
-      });
-    }
-    return this.companyProjectsService.addLaunchTrainingSessionForAdmin(projectId, file, dto);
+    return addLaunchTrainingSessionFromMultipart(
+      this.companyProjectsService,
+      projectId,
+      dto,
+      files,
+    );
   }
 
   /**
    * Upload Launch And Training (Site Visit Report) – consultant/facilitator upload.
    * POST /api/company/projects/:projectId/launch-and-training-document
    * Body (multipart): launch_upload (file, PDF), launch_training_report_date (string).
-   * Same as session_index 1 on POST .../launch-and-training/sessions.
    */
   @Post(':projectId/launch-and-training-document')
   @UseGuards(JwtAuthGuard, AccountStatusGuard)
@@ -1628,49 +1093,12 @@ export class CompanyProjectsController {
         message: 'No file uploaded. Please select a PDF file (launch_upload).',
       });
     }
-    return this.companyProjectsService.uploadLaunchAndTraining(req.user.userId, projectId, file, {
-      launch_training_report_date: dto.launch_training_report_date,
-      session_date: dto.session_date,
-      session_index: dto.session_index,
-    });
-  }
-
-  /**
-   * Admin: legacy session-1 upload (memory → saved under resolved company folder in service).
-   * POST /api/company/projects/:projectId/admin/launch-and-training-document
-   */
-  @Post(':projectId/admin/launch-and-training-document')
-  @UseGuards(AdminJwtAuthGuard)
-  @UseInterceptors(
-    FileInterceptor('launch_upload', {
-      storage: memoryStorage(),
-      limits: { fileSize: 10 * 1024 * 1024 },
-      fileFilter: (req, file, cb) => {
-        if (file.mimetype === 'application/pdf') {
-          cb(null, true);
-        } else {
-          cb(new Error('Invalid file type. Only PDF files are allowed.'), false);
-        }
-      },
-    }),
-  )
-  @UsePipes(new ValidationPipe({ whitelist: true, transform: true }))
-  async uploadLaunchAndTrainingAdmin(
-    @Param('projectId') projectId: string,
-    @UploadedFile() file: Express.Multer.File,
-    @Body() dto: UploadLaunchAndTrainingDto,
-  ): Promise<any> {
-    if (!file) {
-      throw new BadRequestException({
-        status: 'error',
-        message: 'No file uploaded. Please select a PDF file (launch_upload).',
-      });
-    }
-    return this.companyProjectsService.uploadLaunchAndTrainingForAdmin(projectId, file, {
-      launch_training_report_date: dto.launch_training_report_date,
-      session_date: dto.session_date,
-      session_index: dto.session_index,
-    });
+    return this.companyProjectsService.uploadLaunchAndTraining(
+      req.user.userId,
+      projectId,
+      file,
+      dto.launch_training_report_date,
+    );
   }
 
   /**
@@ -1690,33 +1118,6 @@ export class CompanyProjectsController {
   }
 
   /**
-   * Dashboard alias (fixes 404 on some clients). Same payload as assignment-details.
-   * Open route: `:projectId` may be project _id or company _id (same resolution as quickview).
-   * GET /api/company/projects/:projectId/assignments
-   */
-  @Get(':projectId/assignments')
-  async getAssignmentsAlias(@Param('projectId') projectId: string): Promise<any> {
-    return this.companyProjectsService.getAssignmentDetailsForAdmin(projectId);
-  }
-
-  /**
-   * Primary Data: per-tab review state + which tabs allow company re-upload (`editable_section_codes_for_reupload`).
-   * GET /api/company/projects/:projectId/primary-data/review
-   * With company JWT: `projectId` must be the project _id for that company. Without JWT: admin-style id resolve.
-   */
-  @Get(':projectId/primary-data/review')
-  async getPrimaryDataSectionReviews(
-    @Request() req,
-    @Param('projectId') projectId: string,
-  ): Promise<any> {
-    const companyId = req?.user?.userId;
-    if (companyId) {
-      return this.companyProjectsService.getPrimaryDataSectionReviewsForCompany(companyId, projectId);
-    }
-    return this.companyProjectsService.getPrimaryDataSectionReviewsForAdmin(projectId);
-  }
-
-  /**
    * Primary Data Form: load form + saved data (company).
    * GET /api/company/projects/:projectId/primary-data
    */
@@ -1726,10 +1127,20 @@ export class CompanyProjectsController {
     @Param('projectId') projectId: string,
   ): Promise<any> {
     const companyId = req?.user?.userId;
-    if (companyId) {
-      return this.companyProjectsService.getPrimaryData(companyId, projectId);
-    }
-    return this.companyProjectsService.getPrimaryDataForAdmin(projectId);
+    return this.companyProjectsService.getPrimaryData(companyId, projectId);
+  }
+
+  /**
+   * Primary Data EE only: load Energy Efficiency section data.
+   * GET /api/company/projects/:projectId/primary-data/ee
+   */
+  @Get(':projectId/primary-data/ee')
+  async getPrimaryDataEe(
+    @Request() req,
+    @Param('projectId') projectId: string,
+  ): Promise<any> {
+    const companyId = req?.user?.userId;
+    return this.companyProjectsService.getPrimaryDataEe(companyId, projectId);
   }
 
   /**
@@ -1762,6 +1173,25 @@ export class CompanyProjectsController {
       formType,
       payload,
       body?.final_submit,
+    );
+  }
+
+  /**
+   * Primary Data EE only: save with legacy EE payload shape.
+   * POST /api/company/projects/:projectId/primary-data/ee
+   * Body supports: form_type=ee, ee[6], ee[7], ... (same as legacy /company/primary_data/:projectId).
+   */
+  @Post(':projectId/primary-data/ee')
+  async savePrimaryDataEe(
+    @Request() req,
+    @Param('projectId') projectId: string,
+    @Body() body: { form_type?: string; formType?: string; ee?: Record<string, any> | any[]; [key: string]: any },
+  ): Promise<any> {
+    const companyId = req?.user?.userId;
+    return this.companyProjectsService.savePrimaryDataEeByCompanyProjectId(
+      companyId,
+      projectId,
+      body,
     );
   }
 
@@ -1920,58 +1350,244 @@ export class CompanyProjectsController {
   }
 
   /**
+   * Finance v2 (new API): create/list Proforma/Tax invoice rows with SGST/CGST/IGST + reminder settings.
+   * These endpoints are separate from legacy `/invoices/*` APIs.
+   */
+  @Get([':projectId/finance-v2/proforma-invoices', ':projectId/finance-v2/invoices'])
+  @Header('Cache-Control', 'no-store, no-cache, must-revalidate, private')
+  async getFinanceV2Invoices(
+    @Param('projectId') projectId: string,
+  ): Promise<any> {
+    return this.companyProjectsService.getFinanceV2InvoicesByProjectId(projectId);
+  }
+
+  @Post([':projectId/finance-v2/proforma-invoices', ':projectId/finance-v2/invoices'])
+  @UsePipes(new ValidationPipe({ transform: true, whitelist: true }))
+  @UseInterceptors(
+    FileInterceptor('invoice_document', {
+      storage: diskStorage({
+        destination: (req, file, cb) => {
+          const projectId = (req as any).params?.projectId || 'unknown';
+          const uploadPath = join(process.cwd(), 'uploads', 'company', projectId, 'finance-v2');
+          if (!fs.existsSync(uploadPath)) {
+            fs.mkdirSync(uploadPath, { recursive: true });
+          }
+          cb(null, uploadPath);
+        },
+        filename: (req, file, cb) => {
+          const ext = extname(file.originalname);
+          cb(null, `finance-v2-${Date.now()}${ext}`);
+        },
+      }),
+      limits: { fileSize: 10 * 1024 * 1024 },
+      fileFilter: (req, file, cb) => {
+        const allowed = [
+          'application/pdf',
+          'image/jpeg',
+          'image/jpg',
+          'image/png',
+        ];
+        if (allowed.includes(file.mimetype)) {
+          cb(null, true);
+        } else {
+          cb(new Error('Invoice document must be PDF, JPG, JPEG or PNG.'), false);
+        }
+      },
+    }),
+  )
+  async createFinanceV2Invoice(
+    @Param('projectId') projectId: string,
+    @Body() dto: CreateProformaInvoiceV2Dto,
+    @UploadedFile() file: Express.Multer.File,
+  ): Promise<any> {
+    if (!file) {
+      throw new BadRequestException({
+        status: 'error',
+        message: 'No file uploaded. Use field name "invoice_document".',
+      });
+    }
+    return this.companyProjectsService.createFinanceV2InvoiceByProjectId(projectId, dto, file);
+  }
+
+  @Patch([
+    ':projectId/finance-v2/proforma-invoices/:invoiceId',
+    ':projectId/finance-v2/invoices/:invoiceId',
+  ])
+  @UsePipes(new ValidationPipe({ transform: true, whitelist: true }))
+  @UseInterceptors(
+    FileInterceptor('invoice_document', {
+      storage: diskStorage({
+        destination: (req, file, cb) => {
+          const projectId = (req as any).params?.projectId || 'unknown';
+          const uploadPath = join(process.cwd(), 'uploads', 'company', projectId, 'finance-v2');
+          if (!fs.existsSync(uploadPath)) {
+            fs.mkdirSync(uploadPath, { recursive: true });
+          }
+          cb(null, uploadPath);
+        },
+        filename: (req, file, cb) => {
+          const ext = extname(file.originalname);
+          cb(null, `finance-v2-${Date.now()}${ext}`);
+        },
+      }),
+      limits: { fileSize: 10 * 1024 * 1024 },
+      fileFilter: (req, file, cb) => {
+        const allowed = [
+          'application/pdf',
+          'image/jpeg',
+          'image/jpg',
+          'image/png',
+        ];
+        if (allowed.includes(file.mimetype)) {
+          cb(null, true);
+        } else {
+          cb(new Error('Invoice document must be PDF, JPG, JPEG or PNG.'), false);
+        }
+      },
+    }),
+  )
+  async updateFinanceV2Invoice(
+    @Param('projectId') projectId: string,
+    @Param('invoiceId') invoiceId: string,
+    @Body() dto: UpdateProformaInvoiceV2Dto,
+    @UploadedFile() file?: Express.Multer.File,
+  ): Promise<any> {
+    return this.companyProjectsService.updateFinanceV2InvoiceByProjectId(projectId, invoiceId, dto, file);
+  }
+
+  @Patch(':projectId/finance-v2/proforma-invoices/:invoiceId/reminder-settings')
+  @UsePipes(new ValidationPipe({ transform: true, whitelist: true }))
+  async updateFinanceV2ReminderSettings(
+    @Param('projectId') projectId: string,
+    @Param('invoiceId') invoiceId: string,
+    @Body() dto: UpdateFinanceV2ReminderDto,
+  ): Promise<any> {
+    return this.companyProjectsService.updateFinanceV2ReminderSettingsByProjectId(
+      projectId,
+      invoiceId,
+      dto,
+    );
+  }
+
+  @Post(':projectId/finance-v2/proforma-invoices/:invoiceId/submit-payment')
+  @Post(':projectId/finance-v2/tax-invoices/:invoiceId/submit-payment')
+  @UsePipes(new ValidationPipe({ transform: true, whitelist: true }))
+  @UseInterceptors(
+    FileFieldsInterceptor([
+      { name: 'supportingdocument', maxCount: 1 },
+      { name: 'supporting_document', maxCount: 1 },
+      { name: 'supportingDocument', maxCount: 1 },
+      { name: 'file', maxCount: 1 },
+    ], {
+      storage: diskStorage({
+        destination: (req, file, cb) => {
+          const projectId = (req as any).params?.projectId || 'unknown';
+          const uploadPath = join(process.cwd(), 'uploads', 'company', projectId, 'finance-v2-payments');
+          if (!fs.existsSync(uploadPath)) {
+            fs.mkdirSync(uploadPath, { recursive: true });
+          }
+          cb(null, uploadPath);
+        },
+        filename: (req, file, cb) => {
+          const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
+          const ext = extname(file.originalname);
+          cb(null, `finance-v2-payment-${uniqueSuffix}${ext}`);
+        },
+      }),
+      limits: { fileSize: 10 * 1024 * 1024 },
+      fileFilter: (req, file, cb) => {
+        const allowed = ['application/pdf', 'image/jpeg', 'image/jpg', 'image/png'];
+        if (allowed.includes(file.mimetype)) cb(null, true);
+        else cb(new Error('Supporting document must be PDF, JPG, JPEG or PNG.'), false);
+      },
+    }),
+  )
+  async submitFinanceV2Payment(
+    @Param('projectId') projectId: string,
+    @Param('invoiceId') invoiceId: string,
+    @Body() dto: SubmitFinanceV2PaymentDto,
+    @UploadedFiles()
+    files?: {
+      supportingdocument?: Express.Multer.File[];
+      supporting_document?: Express.Multer.File[];
+      supportingDocument?: Express.Multer.File[];
+      file?: Express.Multer.File[];
+    },
+  ): Promise<any> {
+    const file =
+      files?.supportingdocument?.[0] ||
+      files?.supporting_document?.[0] ||
+      files?.supportingDocument?.[0] ||
+      files?.file?.[0];
+    return this.companyProjectsService.submitFinanceV2PaymentByProjectId(
+      projectId,
+      invoiceId,
+      dto,
+      file,
+    );
+  }
+
+  @Patch(':projectId/finance-v2/proforma-invoices/:invoiceId/approval')
+  @UsePipes(new ValidationPipe({ transform: true, whitelist: true }))
+  async updateFinanceV2Approval(
+    @Param('projectId') projectId: string,
+    @Param('invoiceId') invoiceId: string,
+    @Body() dto: UpdateFinanceV2ApprovalDto,
+  ): Promise<any> {
+    return this.companyProjectsService.updateFinanceV2ApprovalByProjectId(
+      projectId,
+      invoiceId,
+      dto,
+    );
+  }
+
+  /**
+   * Finance v2 reminders (new API):
+   * - send pending reminders due as of now (+15 day rollover)
+   * - trigger one invoice reminder immediately
+   */
+  @Post(':projectId/finance-v2/proforma-invoices/reminders/process')
+  async processFinanceV2Reminders(
+    @Param('projectId') projectId: string,
+  ): Promise<any> {
+    return this.companyProjectsService.processFinanceV2RemindersForProjectByProjectId(projectId);
+  }
+
+  @Post(':projectId/finance-v2/proforma-invoices/:invoiceId/reminder/send-now')
+  async sendFinanceV2ReminderNow(
+    @Param('projectId') projectId: string,
+    @Param('invoiceId') invoiceId: string,
+  ): Promise<any> {
+    return this.companyProjectsService.sendFinanceV2ReminderNowByProjectId(projectId, invoiceId);
+  }
+
+  /**
    * Finance: Payments/Proforma invoices (payment_for = per_inv).
    * GET /api/company/projects/:projectId/proforma-invoices
+   *
+   * Response: `{ status, message, data: { invoices, ... } }` where `data.invoices[]` matches
+   * frontend `CompanyInvoiceItem` keys including: `trans_id`, `payment_type` ('Online' | 'Offline'),
+   * `offline_tran_doc` (absolute URL), `offline_tran_doc_filename`.
    */
   @Get(':projectId/proforma-invoices')
   async getProformaInvoices(
-    @Request() req,
     @Param('projectId') projectId: string,
   ): Promise<any> {
-    const companyId = req?.user?.userId;
-    if (companyId) {
-      return this.companyProjectsService.getInvoices(companyId, projectId, 'per_inv');
-    }
-    return this.companyProjectsService.getInvoicesOpen(projectId, 'per_inv');
+    return this.companyProjectsService.getInvoicesByProjectId(projectId, 'per_inv');
   }
 
   /**
    * Finance: Tax Invoices (payment_for = inv).
    * GET /api/company/projects/:projectId/tax-invoices
+   *
+   * Same response shape as proforma-invoices: `data.invoices[]` with `trans_id`, `payment_type`,
+   * `offline_tran_doc`, `offline_tran_doc_filename` (and other invoice fields from `getInvoices`).
    */
   @Get(':projectId/tax-invoices')
   async getTaxInvoices(
-    @Request() req,
     @Param('projectId') projectId: string,
   ): Promise<any> {
-    const companyId = req?.user?.userId;
-    if (companyId) {
-      return this.companyProjectsService.getInvoices(companyId, projectId, 'inv');
-    }
-    return this.companyProjectsService.getInvoicesOpen(projectId, 'inv');
-  }
-
-  /**
-   * Finance (new): get payment status/details.
-   * GET /api/company/projects/:projectId/finance/payments?payment_for=per_inv|inv
-   */
-  @Get(':projectId/finance/payments')
-  async getFinancePayments(
-    @Request() req,
-    @Param('projectId') projectId: string,
-    @Query('payment_for') paymentFor?: 'per_inv' | 'inv',
-  ): Promise<any> {
-    const normalized =
-      paymentFor === 'per_inv' || paymentFor === 'inv' ? paymentFor : undefined;
-    const companyId = req?.user?.userId;
-    if (companyId) {
-      return this.companyProjectsService.getFinancePayments(
-        companyId,
-        projectId,
-        normalized,
-      );
-    }
-    return this.companyProjectsService.getFinancePaymentsOpen(projectId, normalized);
+    return this.companyProjectsService.getInvoicesByProjectId(projectId, 'inv');
   }
 
   /**
@@ -2042,14 +1658,18 @@ export class CompanyProjectsController {
    * POST /api/company/projects/:projectId/invoices/:invoiceId/submit-payment
    */
   @Post(':projectId/invoices/:invoiceId/submit-payment')
-  @UseGuards(JwtAuthGuard, AccountStatusGuard)
   @UsePipes(new ValidationPipe({ transform: true, whitelist: true }))
   @UseInterceptors(
-    FileInterceptor('supportingdocument', {
+    FileFieldsInterceptor([
+      { name: 'supportingdocument', maxCount: 1 },
+      { name: 'supporting_document', maxCount: 1 },
+      { name: 'supportingDocument', maxCount: 1 },
+      { name: 'file', maxCount: 1 },
+    ], {
       storage: diskStorage({
         destination: (req, file, cb) => {
-          const companyId = (req as any).user?.userId;
-          const uploadPath = join(process.cwd(), 'uploads', 'company', companyId || 'unknown');
+          const companyIdOrProjectId = (req as any).user?.userId || (req as any).params?.projectId || 'unknown';
+          const uploadPath = join(process.cwd(), 'uploads', 'company', companyIdOrProjectId);
           if (!fs.existsSync(uploadPath)) {
             fs.mkdirSync(uploadPath, { recursive: true });
           }
@@ -2078,359 +1698,27 @@ export class CompanyProjectsController {
     }),
   )
   async submitPayment(
-    @Request() req,
     @Param('projectId') projectId: string,
     @Param('invoiceId') invoiceId: string,
     @Body() dto: SubmitPaymentDto,
-    @UploadedFile() file?: Express.Multer.File,
+    @UploadedFiles()
+    files?: {
+      supportingdocument?: Express.Multer.File[];
+      supporting_document?: Express.Multer.File[];
+      supportingDocument?: Express.Multer.File[];
+      file?: Express.Multer.File[];
+    },
   ): Promise<any> {
-    return this.companyProjectsService.submitPayment(
-      req.user.userId,
+    const file =
+      files?.supportingdocument?.[0] ||
+      files?.supporting_document?.[0] ||
+      files?.supportingDocument?.[0] ||
+      files?.file?.[0];
+    return this.companyProjectsService.submitPaymentByProjectId(
       projectId,
       invoiceId,
       dto,
       file,
-    );
-  }
-
-  private mapFinancePaymentPayload(
-    body: any,
-    files:
-      | {
-          supporting_document?: Express.Multer.File[];
-          supportingdocument?: Express.Multer.File[];
-          supportingDocument?: Express.Multer.File[];
-          supporting_doc?: Express.Multer.File[];
-        }
-      | Express.Multer.File[],
-  ): { dto: SubmitPaymentDto; supportingDoc?: Express.Multer.File } {
-    let supportingDoc: Express.Multer.File | undefined;
-    if (Array.isArray(files)) {
-      const picked = files.find((f) =>
-        ['supporting_document', 'supportingdocument', 'supportingDocument', 'supporting_doc', 'supporting_document[]', 'supportingdocument[]', 'file'].includes(
-          String((f as any)?.fieldname || ''),
-        ),
-      );
-      supportingDoc = picked ?? files[0];
-    } else {
-      supportingDoc =
-        files?.supporting_document?.[0] ??
-        files?.supportingdocument?.[0] ??
-        files?.supportingDocument?.[0] ??
-        files?.supporting_doc?.[0];
-    }
-
-    const rawPaymentType =
-      body?.payment_type ??
-      body?.paymentMode ??
-      body?.payment_mode ??
-      body?.mode;
-    const paymentType =
-      String(rawPaymentType || '').toLowerCase() === 'offline' ? 'Offline' : 'Online';
-    const transactionId =
-      body?.trans_id ??
-      body?.transaction_id ??
-      body?.transactionId ??
-      body?.transactionID;
-
-    const dto: SubmitPaymentDto = {
-      payment_type: paymentType,
-      trans_id: transactionId,
-    };
-    return { dto, supportingDoc };
-  }
-
-  @Post(':projectId/proforma-invoices/:invoiceId/submit-payment')
-  @UseGuards(JwtAuthGuard, AccountStatusGuard)
-  @UsePipes(new ValidationPipe({ transform: true, whitelist: true }))
-  @UseInterceptors(
-    AnyFilesInterceptor({
-      storage: diskStorage({
-        destination: (req, file, cb) => {
-          const companyId = (req as any).user?.userId;
-          const uploadPath = join(process.cwd(), 'uploads', 'company', companyId || 'unknown');
-          if (!fs.existsSync(uploadPath)) {
-            fs.mkdirSync(uploadPath, { recursive: true });
-          }
-          cb(null, uploadPath);
-        },
-        filename: (req, file, cb) => {
-          const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
-          const ext = extname(file.originalname);
-          cb(null, `payment-${uniqueSuffix}${ext}`);
-        },
-      }),
-      limits: { fileSize: 10 * 1024 * 1024 },
-      fileFilter: (req, file, cb) => {
-        const allowed = ['application/pdf', 'image/jpeg', 'image/jpg', 'image/png'];
-        if (allowed.includes(file.mimetype)) cb(null, true);
-        else cb(new Error('Supporting document must be PDF, JPG, JPEG or PNG.'), false);
-      },
-    }),
-  )
-  async submitPaymentProformaLegacy(
-    @Request() req,
-    @Param('projectId') projectId: string,
-    @Param('invoiceId') invoiceId: string,
-    @Body() body: any,
-    @UploadedFiles() files: Express.Multer.File[],
-  ): Promise<any> {
-    const { dto, supportingDoc } = this.mapFinancePaymentPayload(body, files);
-    return this.companyProjectsService.submitPayment(
-      req.user.userId,
-      projectId,
-      invoiceId,
-      dto,
-      supportingDoc,
-    );
-  }
-
-  @Post(':projectId/tax-invoices/:invoiceId/submit-payment')
-  @UseGuards(JwtAuthGuard, AccountStatusGuard)
-  @UsePipes(new ValidationPipe({ transform: true, whitelist: true }))
-  @UseInterceptors(
-    AnyFilesInterceptor({
-      storage: diskStorage({
-        destination: (req, file, cb) => {
-          const companyId = (req as any).user?.userId;
-          const uploadPath = join(process.cwd(), 'uploads', 'company', companyId || 'unknown');
-          if (!fs.existsSync(uploadPath)) {
-            fs.mkdirSync(uploadPath, { recursive: true });
-          }
-          cb(null, uploadPath);
-        },
-        filename: (req, file, cb) => {
-          const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
-          const ext = extname(file.originalname);
-          cb(null, `payment-${uniqueSuffix}${ext}`);
-        },
-      }),
-      limits: { fileSize: 10 * 1024 * 1024 },
-      fileFilter: (req, file, cb) => {
-        const allowed = ['application/pdf', 'image/jpeg', 'image/jpg', 'image/png'];
-        if (allowed.includes(file.mimetype)) cb(null, true);
-        else cb(new Error('Supporting document must be PDF, JPG, JPEG or PNG.'), false);
-      },
-    }),
-  )
-  async submitPaymentTaxLegacy(
-    @Request() req,
-    @Param('projectId') projectId: string,
-    @Param('invoiceId') invoiceId: string,
-    @Body() body: any,
-    @UploadedFiles() files: Express.Multer.File[],
-  ): Promise<any> {
-    const { dto, supportingDoc } = this.mapFinancePaymentPayload(body, files);
-    return this.companyProjectsService.submitPayment(
-      req.user.userId,
-      projectId,
-      invoiceId,
-      dto,
-      supportingDoc,
-    );
-  }
-
-  /**
-   * Finance v2 compatibility: submit payment for Proforma invoice.
-   * POST /api/company/projects/:projectId/finance/v2/proforma-invoices/:invoiceId/submit-payment
-   */
-  @Post(':projectId/finance/v2/proforma-invoices/:invoiceId/submit-payment')
-  @UseGuards(JwtAuthGuard, AccountStatusGuard)
-  @UsePipes(new ValidationPipe({ transform: true, whitelist: true }))
-  @UseInterceptors(
-    AnyFilesInterceptor({
-      storage: diskStorage({
-        destination: (req, file, cb) => {
-          const companyId = (req as any).user?.userId;
-          const uploadPath = join(process.cwd(), 'uploads', 'company', companyId || 'unknown');
-          if (!fs.existsSync(uploadPath)) {
-            fs.mkdirSync(uploadPath, { recursive: true });
-          }
-          cb(null, uploadPath);
-        },
-        filename: (req, file, cb) => {
-          const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
-          const ext = extname(file.originalname);
-          cb(null, `payment-${uniqueSuffix}${ext}`);
-        },
-      }),
-      limits: { fileSize: 10 * 1024 * 1024 },
-      fileFilter: (req, file, cb) => {
-        const allowed = ['application/pdf', 'image/jpeg', 'image/jpg', 'image/png'];
-        if (allowed.includes(file.mimetype)) {
-          cb(null, true);
-        } else {
-          cb(new Error('Supporting document must be PDF, JPG, JPEG or PNG.'), false);
-        }
-      },
-    }),
-  )
-  async submitPaymentFinanceV2Proforma(
-    @Request() req,
-    @Param('projectId') projectId: string,
-    @Param('invoiceId') invoiceId: string,
-    @Body() body: any,
-    @UploadedFiles() files: Express.Multer.File[],
-  ): Promise<any> {
-    const { dto, supportingDoc } = this.mapFinancePaymentPayload(body, files);
-    return this.companyProjectsService.submitPayment(
-      req.user.userId,
-      projectId,
-      invoiceId,
-      dto,
-      supportingDoc,
-    );
-  }
-
-  /**
-   * Finance v2 compatibility: submit payment for Tax invoice.
-   * POST /api/company/projects/:projectId/finance/v2/tax-invoices/:invoiceId/submit-payment
-   */
-  @Post(':projectId/finance/v2/tax-invoices/:invoiceId/submit-payment')
-  @UseGuards(JwtAuthGuard, AccountStatusGuard)
-  @UsePipes(new ValidationPipe({ transform: true, whitelist: true }))
-  @UseInterceptors(
-    AnyFilesInterceptor({
-      storage: diskStorage({
-        destination: (req, file, cb) => {
-          const companyId = (req as any).user?.userId;
-          const uploadPath = join(process.cwd(), 'uploads', 'company', companyId || 'unknown');
-          if (!fs.existsSync(uploadPath)) {
-            fs.mkdirSync(uploadPath, { recursive: true });
-          }
-          cb(null, uploadPath);
-        },
-        filename: (req, file, cb) => {
-          const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
-          const ext = extname(file.originalname);
-          cb(null, `payment-${uniqueSuffix}${ext}`);
-        },
-      }),
-      limits: { fileSize: 10 * 1024 * 1024 },
-      fileFilter: (req, file, cb) => {
-        const allowed = ['application/pdf', 'image/jpeg', 'image/jpg', 'image/png'];
-        if (allowed.includes(file.mimetype)) {
-          cb(null, true);
-        } else {
-          cb(new Error('Supporting document must be PDF, JPG, JPEG or PNG.'), false);
-        }
-      },
-    }),
-  )
-  async submitPaymentFinanceV2Tax(
-    @Request() req,
-    @Param('projectId') projectId: string,
-    @Param('invoiceId') invoiceId: string,
-    @Body() body: any,
-    @UploadedFiles() files: Express.Multer.File[],
-  ): Promise<any> {
-    const { dto, supportingDoc } = this.mapFinancePaymentPayload(body, files);
-    return this.companyProjectsService.submitPayment(
-      req.user.userId,
-      projectId,
-      invoiceId,
-      dto,
-      supportingDoc,
-    );
-  }
-
-  /**
-   * Finance (new): submit payment without invoiceId in URL.
-   * POST /api/company/projects/:projectId/finance/payments/submit
-   * Form: payment_for, payment_type, trans_id?, supporting_document (or supportingdocument)
-   */
-  @Post(':projectId/finance/payments/submit')
-  @UseGuards(JwtAuthGuard, AccountStatusGuard)
-  @UsePipes(new ValidationPipe({ transform: true, whitelist: true }))
-  @UseInterceptors(
-    AnyFilesInterceptor({
-      storage: diskStorage({
-        destination: (req, file, cb) => {
-          const companyId = (req as any).user?.userId;
-          const uploadPath = join(process.cwd(), 'uploads', 'company', companyId || 'unknown');
-          if (!fs.existsSync(uploadPath)) {
-            fs.mkdirSync(uploadPath, { recursive: true });
-          }
-          cb(null, uploadPath);
-        },
-        filename: (req, file, cb) => {
-          const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
-          const ext = extname(file.originalname);
-          cb(null, `payment-${uniqueSuffix}${ext}`);
-        },
-      }),
-      limits: { fileSize: 10 * 1024 * 1024 },
-      fileFilter: (req, file, cb) => {
-        const allowed = ['application/pdf', 'image/jpeg', 'image/jpg', 'image/png'];
-        if (allowed.includes(file.mimetype)) {
-          cb(null, true);
-        } else {
-          cb(new Error('Supporting document must be PDF, JPG, JPEG or PNG.'), false);
-        }
-      },
-    }),
-  )
-  async submitFinancePayment(
-    @Request() req,
-    @Param('projectId') projectId: string,
-    @Body() dto: SubmitFinancePaymentDto,
-    @UploadedFiles() files: Express.Multer.File[],
-  ): Promise<any> {
-    const supportingDoc =
-      files?.find((f) =>
-        ['supporting_document', 'supportingdocument', 'supportingDocument', 'supporting_doc', 'supporting_document[]', 'supportingdocument[]', 'file'].includes(
-          String((f as any)?.fieldname || ''),
-        ),
-      ) ?? files?.[0];
-    return this.companyProjectsService.submitFinancePayment(
-      req.user.userId,
-      projectId,
-      dto,
-      supportingDoc,
-    );
-  }
-
-  /**
-   * Finance v2: create invoice finance metadata (GST/state/amount fields).
-   * POST /api/company/projects/:projectId/finance-v2/invoices
-   * Alias: /api/company/projects/:projectId/finance/v2/invoices
-   */
-  @Post(':projectId/finance-v2/invoices')
-  @Post(':projectId/finance/v2/invoices')
-  @UseGuards(JwtAuthGuard, AccountStatusGuard)
-  @UsePipes(new ValidationPipe({ transform: true, whitelist: true }))
-  async createFinanceV2Invoice(
-    @Request() req,
-    @Param('projectId') projectId: string,
-    @Body() dto: FinanceV2InvoiceDto,
-  ): Promise<any> {
-    return this.companyProjectsService.createFinanceV2Invoice(
-      req.user.userId,
-      projectId,
-      dto,
-    );
-  }
-
-  /**
-   * Finance v2: update invoice finance metadata (GST/state/amount fields).
-   * PATCH /api/company/projects/:projectId/finance-v2/invoices/:invoiceId
-   * Alias: /api/company/projects/:projectId/finance/v2/invoices/:invoiceId
-   */
-  @Patch(':projectId/finance-v2/invoices/:invoiceId')
-  @Patch(':projectId/finance/v2/invoices/:invoiceId')
-  @UseGuards(JwtAuthGuard, AccountStatusGuard)
-  @UsePipes(new ValidationPipe({ transform: true, whitelist: true }))
-  async updateFinanceV2Invoice(
-    @Request() req,
-    @Param('projectId') projectId: string,
-    @Param('invoiceId') invoiceId: string,
-    @Body() dto: FinanceV2InvoiceDto,
-  ): Promise<any> {
-    return this.companyProjectsService.updateFinanceV2Invoice(
-      req.user.userId,
-      projectId,
-      invoiceId,
-      dto,
     );
   }
 
@@ -2440,131 +1728,125 @@ export class CompanyProjectsController {
    * Body: { "approval_status": 0 | 1 | 2 | 3 } — 0=Pending, 1=Approved, 2=Rejected, 3=Under Review
    */
   @Patch(':projectId/invoices/:invoiceId/approval')
+  @UsePipes(new ValidationPipe({ transform: true, whitelist: true }))
   async updateInvoiceApproval(
-    @Request() req,
     @Param('projectId') projectId: string,
     @Param('invoiceId') invoiceId: string,
-    @Body() body: any,
+    @Body() dto: UpdateInvoiceApprovalDto,
   ): Promise<any> {
-    const approvalStatus = this.normalizeInvoiceApprovalStatus(body);
-    const remarks = this.extractInvoiceApprovalRemarks(body);
-    return this.updateInvoiceApprovalInternal(
-      req.user.userId,
+    return this.companyProjectsService.updateInvoiceApprovalStatusByProjectId(
       projectId,
       invoiceId,
-      approvalStatus,
-      remarks,
-    );
-  }
-
-  @Patch(':projectId/proforma-invoices/:invoiceId/approval')
-  async updateProformaInvoiceApproval(
-    @Request() req,
-    @Param('projectId') projectId: string,
-    @Param('invoiceId') invoiceId: string,
-    @Body() body: any,
-  ): Promise<any> {
-    const approvalStatus = this.normalizeInvoiceApprovalStatus(body);
-    const remarks = this.extractInvoiceApprovalRemarks(body);
-    return this.updateInvoiceApprovalInternal(
-      req.user.userId,
-      projectId,
-      invoiceId,
-      approvalStatus,
-      remarks,
-    );
-  }
-
-  @Patch(':projectId/tax-invoices/:invoiceId/approval')
-  async updateTaxInvoiceApproval(
-    @Request() req,
-    @Param('projectId') projectId: string,
-    @Param('invoiceId') invoiceId: string,
-    @Body() body: any,
-  ): Promise<any> {
-    const approvalStatus = this.normalizeInvoiceApprovalStatus(body);
-    const remarks = this.extractInvoiceApprovalRemarks(body);
-    return this.updateInvoiceApprovalInternal(
-      req.user.userId,
-      projectId,
-      invoiceId,
-      approvalStatus,
-      remarks,
-    );
-  }
-
-  @Patch(':projectId/finance-v2/proforma-invoices/:invoiceId/approval')
-  @Patch(':projectId/finance-v2/tax-invoices/:invoiceId/approval')
-  @Patch(':projectId/finance/v2/proforma-invoices/:invoiceId/approval')
-  @Patch(':projectId/finance/v2/tax-invoices/:invoiceId/approval')
-  async updateFinanceV2InvoiceApproval(
-    @Request() req,
-    @Param('projectId') projectId: string,
-    @Param('invoiceId') invoiceId: string,
-    @Body() body: any,
-  ): Promise<any> {
-    const approvalStatus = this.normalizeInvoiceApprovalStatus(body);
-    const remarks = this.extractInvoiceApprovalRemarks(body);
-    return this.updateInvoiceApprovalInternal(
-      req.user.userId,
-      projectId,
-      invoiceId,
-      approvalStatus,
-      remarks,
-    );
-  }
-
-  private normalizeInvoiceApprovalStatus(body: any): number {
-    const rawStatus = body?.approval_status ?? body?.approvalStatus ?? body?.status;
-    const parsed = Number(rawStatus);
-    if (!Number.isFinite(parsed)) {
-      throw new BadRequestException({
-        status: 'error',
-        message:
-          'approval_status (or approvalStatus/status) must be a number (0, 1, 2, 3)',
-      });
-    }
-    if (![0, 1, 2, 3].includes(parsed)) {
-      throw new BadRequestException({
-        status: 'error',
-        message: 'Invalid approval status. Allowed values: 0, 1, 2, 3',
-      });
-    }
-    // Frontend compatibility: some clients send 3 as "Not Acknowledged" (rejection intent).
-    return parsed === 3 ? 2 : parsed;
-  }
-
-  private extractInvoiceApprovalRemarks(body: any): string | undefined {
-    const raw = body?.remarks ?? body?.approval_remarks;
-    if (raw === undefined || raw === null) {
-      return undefined;
-    }
-    const normalized = String(raw).trim();
-    return normalized.length > 0 ? normalized : undefined;
-  }
-
-  private updateInvoiceApprovalInternal(
-    companyId: string,
-    projectId: string,
-    invoiceId: string,
-    approvalStatus: number,
-    remarks?: string,
-  ): Promise<any> {
-    return this.companyProjectsService.updateInvoiceApprovalStatus(
-      companyId,
-      projectId,
-      invoiceId,
-      approvalStatus,
-      remarks,
+      dto.approval_status,
     );
   }
 
   /**
-   * Upload Work Order Document (Company uploads)
+   * Re-upload work order PDF after CII rejected it (wo_status must be 2).
+   * POST /api/company/projects/:projectId/work-order-document/reupload
+   * Same multipart field as first upload: workorderdocument (PDF).
+   */
+  @Post(':projectId/work-order-document/reupload')
+  @UseInterceptors(
+    FileInterceptor('workorderdocument', {
+      storage: diskStorage({
+        destination: (req, file, cb) => {
+          const projectId = req.params.projectId;
+          const uploadPath = join(process.cwd(), 'uploads', 'companyproject', projectId);
+          if (!fs.existsSync(uploadPath)) {
+            fs.mkdirSync(uploadPath, { recursive: true });
+          }
+          cb(null, uploadPath);
+        },
+        filename: (req, file, cb) => {
+          const timestamp = Date.now();
+          const ext = extname(file.originalname);
+          cb(null, `${timestamp}_${file.originalname}`);
+        },
+      }),
+      limits: { fileSize: 10 * 1024 * 1024 },
+      fileFilter: (req, file, cb) => {
+        if (file.mimetype === 'application/pdf') {
+          cb(null, true);
+        } else {
+          cb(new Error('Invalid file type. Only PDF files are allowed.'), false);
+        }
+      },
+    }),
+  )
+  async reuploadWorkOrderDocument(
+    @Param('projectId') projectId: string,
+    @UploadedFile() file: Express.Multer.File,
+  ): Promise<any> {
+    if (!file) {
+      throw new BadRequestException({
+        status: 'error',
+        message: 'No file uploaded. Use field workorderdocument (PDF).',
+      });
+    }
+    return this.companyProjectsService.reuploadWorkOrderDocumentByProjectId(projectId, file);
+  }
+
+  /**
+   * CII/Admin: accept (1) or reject (2) the latest work order for this project.
+   * PATCH /api/company/projects/:projectId/work-order-document/review
+   * Body: { "wo_status": 1 | 2, "wo_remarks": "..." } (remarks required when wo_status is 2)
+   */
+  @Patch(':projectId/work-order-document/review')
+  @UsePipes(
+    new ValidationPipe({
+      transform: true,
+      whitelist: true,
+      forbidNonWhitelisted: true,
+    }),
+  )
+  async reviewWorkOrderDocument(
+    @Param('projectId') projectId: string,
+    @Body() dto: ApproveWorkOrderDto,
+  ): Promise<any> {
+    if (dto.wo_status === 2 && !dto.wo_remarks) {
+      throw new BadRequestException({
+        status: 'error',
+        message: 'Remarks are required when rejecting work order',
+      });
+    }
+    return this.companyProjectsService.updateWorkOrderStatusByProjectId(projectId, dto);
+  }
+
+  /**
+   * GET PO number + acceptance date (and suggested default date when accepted but not yet saved).
+   * GET /api/company/projects/:projectId/work-order-document/acceptance
+   */
+  @Get(':projectId/work-order-document/acceptance')
+  async getWorkOrderAcceptanceDetails(@Param('projectId') projectId: string): Promise<any> {
+    return this.companyProjectsService.getWorkOrderAcceptanceDetailsByProjectId(projectId);
+  }
+
+  /**
+   * Save PO number + acceptance date after work order is accepted (wo_status = 1).
+   * PATCH /api/company/projects/:projectId/work-order-document/acceptance
+   * Body: { "wo_po_number": "PO-123", "wo_acceptance_date": "2026-04-11" } — date cannot be in the future.
+   */
+  @Patch(':projectId/work-order-document/acceptance')
+  @UsePipes(
+    new ValidationPipe({
+      transform: true,
+      whitelist: true,
+      forbidNonWhitelisted: true,
+    }),
+  )
+  async setWorkOrderAcceptanceDetails(
+    @Param('projectId') projectId: string,
+    @Body() dto: WorkOrderAcceptanceDetailsDto,
+  ): Promise<any> {
+    return this.companyProjectsService.setWorkOrderAcceptanceDetailsByProjectId(projectId, dto);
+  }
+
+  /**
+   * Upload Work Order Document (Company uploads; JWT = company account)
    * POST /api/company/projects/:projectId/work-order-document
    */
   @Post(':projectId/work-order-document')
-  @UseGuards(JwtAuthGuard, AccountStatusGuard)
   @UseInterceptors(
     FileInterceptor('workorderdocument', {
       storage: diskStorage({
@@ -2600,7 +1882,6 @@ export class CompanyProjectsController {
     }),
   )
   async uploadWorkOrderDocument(
-    @Request() req,
     @Param('projectId') projectId: string,
     @UploadedFile() file: Express.Multer.File,
   ): Promise<any> {
@@ -2617,55 +1898,168 @@ export class CompanyProjectsController {
       size: file.size,
     });
 
-    return this.companyProjectsService.uploadWorkOrderDocument(
-      req.user.userId,
-      projectId,
-      file,
-    );
+    return this.companyProjectsService.uploadWorkOrderDocumentByProjectId(projectId, file);
   }
 
   /**
-   * PO acceptance / WO status form slice (same as admin work-order-po read).
-   * GET /api/company/projects/:projectId/work-order-document/acceptance
-   */
-  @Get(':projectId/work-order-document/acceptance')
-  async getWorkOrderDocumentAcceptance(@Param('projectId') projectId: string): Promise<any> {
-    return this.companyProjectsService.getWorkOrderPoAdminFormForAdmin(projectId);
-  }
-
-  /**
-   * Work order review remarks/status only (no document URL). Placed before work-order-document so
-   * GET .../work-order-document/remarks is not swallowed by the shorter route.
-   * GET /api/company/projects/:projectId/work-order-document/remarks
-   * Open when no company JWT: resolve id like admin quickview (portal / dashboard).
-   */
-  @Get(':projectId/work-order-document/remarks')
-  async getWorkOrderDocumentRemarks(
-    @Request() req,
-    @Param('projectId') projectId: string,
-  ): Promise<any> {
-    const companyId = req?.user?.userId;
-    if (companyId) {
-      return this.companyProjectsService.getWorkOrderDocumentRemarks(companyId, projectId);
-    }
-    return this.companyProjectsService.getWorkOrderDocumentRemarksForAdminParam(projectId);
-  }
-
-  /**
-   * Get latest Work Order document metadata.
+   * Latest work order metadata + status for any panel (Mongo project id or company id in path).
    * GET /api/company/projects/:projectId/work-order-document
-   * Open when no company JWT: resolve id like admin quickview.
+   * data: wo_status (0 pending, 1 accepted, 2 rejected), wo_status_label, can_reupload_work_order, awaiting_cii_review, work_order_id, …
    */
   @Get(':projectId/work-order-document')
-  async getWorkOrderDocument(
+  async getWorkOrderDocument(@Param('projectId') projectId: string): Promise<any> {
+    return this.companyProjectsService.getWorkOrderDocumentByProjectId(projectId);
+  }
+
+  @Get(':projectId/facilitator-contract-document')
+  async getFacilitatorContractDocument(@Param('projectId') projectId: string): Promise<any> {
+    return this.companyProjectsService.getWorkOrderDocumentByProjectId(projectId);
+  }
+
+  @Post(':projectId/facilitator-contract-document')
+  @UseInterceptors(
+    FileInterceptor('workorderdocument', {
+      storage: diskStorage({
+        destination: (req, file, cb) => {
+          const projectId = req.params.projectId;
+          const uploadPath = join(process.cwd(), 'uploads', 'companyproject', projectId);
+          if (!fs.existsSync(uploadPath)) {
+            fs.mkdirSync(uploadPath, { recursive: true });
+          }
+          cb(null, uploadPath);
+        },
+        filename: (req, file, cb) => {
+          const timestamp = Date.now();
+          cb(null, `${timestamp}_${file.originalname}`);
+        },
+      }),
+      limits: { fileSize: 10 * 1024 * 1024 },
+      fileFilter: (req, file, cb) => {
+        if (file.mimetype === 'application/pdf') cb(null, true);
+        else cb(new Error('Invalid file type. Only PDF files are allowed.'), false);
+      },
+    }),
+  )
+  async uploadFacilitatorContractDocument(
+    @Param('projectId') projectId: string,
+    @UploadedFile() file: Express.Multer.File,
+  ): Promise<any> {
+    if (!file) {
+      throw new BadRequestException({
+        status: 'error',
+        message: 'No file uploaded. Please select a PDF file.',
+      });
+    }
+    return this.companyProjectsService.uploadWorkOrderDocumentByProjectId(projectId, file);
+  }
+
+  @Post(':projectId/facilitator-contract-document/reupload')
+  @UseInterceptors(
+    FileInterceptor('workorderdocument', {
+      storage: diskStorage({
+        destination: (req, file, cb) => {
+          const projectId = req.params.projectId;
+          const uploadPath = join(process.cwd(), 'uploads', 'companyproject', projectId);
+          if (!fs.existsSync(uploadPath)) {
+            fs.mkdirSync(uploadPath, { recursive: true });
+          }
+          cb(null, uploadPath);
+        },
+        filename: (req, file, cb) => {
+          const timestamp = Date.now();
+          cb(null, `${timestamp}_${file.originalname}`);
+        },
+      }),
+      limits: { fileSize: 10 * 1024 * 1024 },
+      fileFilter: (req, file, cb) => {
+        if (file.mimetype === 'application/pdf') cb(null, true);
+        else cb(new Error('Invalid file type. Only PDF files are allowed.'), false);
+      },
+    }),
+  )
+  async reuploadFacilitatorContractDocument(
+    @Param('projectId') projectId: string,
+    @UploadedFile() file: Express.Multer.File,
+  ): Promise<any> {
+    if (!file) {
+      throw new BadRequestException({
+        status: 'error',
+        message: 'No file uploaded. Use field workorderdocument (PDF).',
+      });
+    }
+    return this.companyProjectsService.reuploadWorkOrderDocumentByProjectId(projectId, file);
+  }
+
+  @Patch(':projectId/facilitator-contract-document/review')
+  @UsePipes(
+    new ValidationPipe({
+      transform: true,
+      whitelist: true,
+      forbidNonWhitelisted: true,
+    }),
+  )
+  async reviewFacilitatorContractDocument(
+    @Param('projectId') projectId: string,
+    @Body() dto: ApproveWorkOrderDto,
+  ): Promise<any> {
+    if (dto.wo_status === 2 && !dto.wo_remarks) {
+      throw new BadRequestException({
+        status: 'error',
+        message: 'Remarks are required when rejecting work order',
+      });
+    }
+    return this.companyProjectsService.updateWorkOrderStatusByProjectId(projectId, dto);
+  }
+
+  @Get(':projectId/facilitator-contract-document/acceptance')
+  async getFacilitatorContractAcceptance(@Param('projectId') projectId: string): Promise<any> {
+    return this.companyProjectsService.getWorkOrderAcceptanceDetailsByProjectId(projectId);
+  }
+
+  @Patch(':projectId/facilitator-contract-document/acceptance')
+  @UsePipes(
+    new ValidationPipe({
+      transform: true,
+      whitelist: true,
+      forbidNonWhitelisted: true,
+    }),
+  )
+  async setFacilitatorContractAcceptance(
+    @Param('projectId') projectId: string,
+    @Body() dto: WorkOrderAcceptanceDetailsDto,
+  ): Promise<any> {
+    return this.companyProjectsService.setWorkOrderAcceptanceDetailsByProjectId(projectId, dto);
+  }
+
+  /**
+   * Update latest work order status (accept/reject) when caller uses company JWT.
+   * PATCH /api/company/projects/:projectId/work-order-document/status
+   */
+  @Patch(':projectId/work-order-document/status')
+  @UseGuards(JwtAuthGuard, AccountStatusGuard)
+  @UsePipes(
+    new ValidationPipe({
+      transform: true,
+      whitelist: true,
+      forbidNonWhitelisted: true,
+    }),
+  )
+  async updateWorkOrderStatus(
     @Request() req,
     @Param('projectId') projectId: string,
+    @Body() dto: ApproveWorkOrderDto,
   ): Promise<any> {
-    const companyId = req?.user?.userId;
-    if (companyId) {
-      return this.companyProjectsService.getWorkOrderDocument(companyId, projectId);
+    if (dto.wo_status === 2 && !dto.wo_remarks) {
+      throw new BadRequestException({
+        status: 'error',
+        message: 'Remarks are required when rejecting work order',
+      });
     }
-    return this.companyProjectsService.getWorkOrderDocumentForAdminParam(projectId);
+    return this.companyProjectsService.updateWorkOrderStatus(
+      req.user.userId,
+      projectId,
+      dto,
+    );
   }
 
   /**
@@ -2719,6 +2113,56 @@ export class CompanyProjectsController {
   }
 
   /**
+   * GET project code + flags for Quick View (assign after PO / inline edit).
+   * GET /api/company/projects/:projectId/project-code
+   */
+  @Get(':projectId/project-code')
+  async getProjectCodeAssignment(@Param('projectId') projectId: string): Promise<any> {
+    return this.companyProjectsService.getProjectCodeAssignmentByProjectId(projectId);
+  }
+
+  /**
+   * POST assign or update project code (admin; path = Mongo project id or company id).
+   * First assign runs milestone 6; updates only change the code string.
+   * POST /api/company/projects/:projectId/project-code/upsert
+   * Body: { "project_code": "CI2604006" }
+   */
+  @Post(':projectId/project-code/upsert')
+  @UsePipes(
+    new ValidationPipe({
+      transform: true,
+      whitelist: true,
+      forbidNonWhitelisted: true,
+    }),
+  )
+  async upsertProjectCode(
+    @Param('projectId') projectId: string,
+    @Body() dto: ProjectCodeUpsertDto,
+  ): Promise<any> {
+    return this.companyProjectsService.upsertProjectCodeByProjectId(projectId, dto.project_code);
+  }
+
+  /**
+   * Same as POST .../project-code/upsert — shorter URL for UIs.
+   * POST /api/company/projects/:projectId/project-code/assign
+   * Body: { "project_code": "CI2604006" }
+   */
+  @Post(':projectId/project-code/assign')
+  @UsePipes(
+    new ValidationPipe({
+      transform: true,
+      whitelist: true,
+      forbidNonWhitelisted: true,
+    }),
+  )
+  async assignProjectCode(
+    @Param('projectId') projectId: string,
+    @Body() dto: ProjectCodeUpsertDto,
+  ): Promise<any> {
+    return this.companyProjectsService.upsertProjectCodeByProjectId(projectId, dto.project_code);
+  }
+
+  /**
    * Create Project Code (Milestone 6)
    * POST /api/company/projects/:projectId/project-code
    * Admin creates a unique project code for a company project
@@ -2759,22 +2203,62 @@ export class CompanyProjectsController {
   }
 
   /**
+   * Remove Assessor assignment by assessor id or assignment id.
+   * DELETE /api/company/projects/:projectId/assessors/:assessorId
+   */
+  @Delete(':projectId/assessors/:assessorId')
+  @UseGuards(JwtAuthGuard, AccountStatusGuard)
+  async removeAssessorAssignment(
+    @Request() req,
+    @Param('projectId') projectId: string,
+    @Param('assessorId') assessorId: string,
+  ): Promise<any> {
+    return this.companyProjectsService.removeAssessorAssignment(
+      req.user.userId,
+      projectId,
+      assessorId,
+    );
+  }
+
+  /**
    * Assign Coordinator (Milestone 7)
    * POST /api/company/projects/:projectId/assign-coordinator
    * Admin assigns a coordinator to a company project
    */
   @Post(':projectId/assign-coordinator')
-  @UseGuards(JwtAuthGuard, AccountStatusGuard)
   async assignCoordinator(
-    @Request() req,
     @Param('projectId') projectId: string,
-    @Body() dto: AssignCoordinatorDto,
+    /** Raw body: global ValidationPipe strips unknown keys from DTOs; keep full payload for assign. */
+    @Body() body: Record<string, unknown>,
   ): Promise<any> {
-    return this.companyProjectsService.assignCoordinator(
-      req.user.userId,
-      projectId,
-      dto.coordinator_id,
-    );
+    return this.companyProjectsService.assignCoordinatorByProjectId(projectId, body);
+  }
+
+  /**
+   * GET /api/company/projects/:projectId/assignments — coordinators, facilitator, limits, flags
+   */
+  @Get(':projectId/assignments')
+  async getProjectAssignments(@Param('projectId') projectId: string): Promise<any> {
+    return this.companyProjectsService.getProjectAssignmentsByProjectId(projectId);
+  }
+
+  /**
+   * DELETE /api/company/projects/:projectId/coordinators/:assignmentId — remove one coordinator slot
+   */
+  @Delete(':projectId/coordinators/:assignmentId')
+  async removeCoordinatorAssignment(
+    @Param('projectId') projectId: string,
+    @Param('assignmentId') assignmentId: string,
+  ): Promise<any> {
+    return this.companyProjectsService.removeCoordinatorAssignmentByProjectId(projectId, assignmentId);
+  }
+
+  /**
+   * DELETE /api/company/projects/:projectId/facilitator — remove facilitator (CI + Facilitator flow)
+   */
+  @Delete(':projectId/facilitator')
+  async removeFacilitatorAssignment(@Param('projectId') projectId: string): Promise<any> {
+    return this.companyProjectsService.removeFacilitatorAssignmentByProjectId(projectId);
   }
 
   /**
@@ -2783,7 +2267,6 @@ export class CompanyProjectsController {
    * Admin assigns a facilitator to a company project
    */
   @Post(':projectId/assign-facilitator')
-  @UseGuards(JwtAuthGuard, AccountStatusGuard)
   @UseInterceptors(
     FileInterceptor('contract_document', {
       storage: diskStorage({
@@ -2813,13 +2296,11 @@ export class CompanyProjectsController {
     }),
   )
   async assignFacilitator(
-    @Request() req,
     @Param('projectId') projectId: string,
     @Body() dto: AssignFacilitatorDto,
     @UploadedFile() contractDocument?: Express.Multer.File,
   ): Promise<any> {
-    return this.companyProjectsService.assignFacilitator(
-      req.user.userId,
+    return this.companyProjectsService.assignFacilitatorByProjectId(
       projectId,
       dto.facilitator_id,
       dto.contract_fee,
