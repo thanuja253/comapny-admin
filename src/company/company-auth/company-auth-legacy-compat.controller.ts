@@ -1,6 +1,13 @@
 import { Body, Controller, Get, Header, Post, Query } from '@nestjs/common';
 import { CompanyAuthService } from './company-auth.service';
 
+function legacyPickSearch(q?: Record<string, unknown>): string | undefined {
+  if (!q || typeof q !== 'object') return undefined;
+  const raw = q.search ?? q.q ?? q.term ?? q.name ?? q.keyword;
+  const s = typeof raw === 'string' ? raw.trim() : '';
+  return s || undefined;
+}
+
 @Controller(['api/companys/auth', 'companys/auth'])
 export class CompanyAuthLegacyCompatController {
   constructor(private readonly companyAuthService: CompanyAuthService) {}
@@ -26,7 +33,7 @@ export class CompanyAuthLegacyCompatController {
   async getLegacyRegisteredCompanies(
     @Query() query?: Record<string, any>,
   ) {
-    return this.companyAuthService.getCompaniesList(query);
+    return this.companyAuthService.getSubmittedCompanies(legacyPickSearch(query));
   }
 
   @Post([
@@ -50,7 +57,7 @@ export class CompanyAuthLegacyCompatController {
   async postLegacyRegisteredCompanies(
     @Body() body?: Record<string, any>,
   ) {
-    return this.companyAuthService.getCompaniesList(body || {});
+    return this.companyAuthService.getSubmittedCompanies(legacyPickSearch(body));
   }
 
   @Get('companies-filters')

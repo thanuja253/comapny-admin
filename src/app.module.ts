@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { MongooseModule } from '@nestjs/mongoose';
+import { ScheduleModule } from '@nestjs/schedule';
 import { CompanyAuthModule } from './company/company-auth/company-auth.module';
 import { CompanyProjectsModule } from './company/company-projects/company-projects.module';
 import { NotificationsModule } from './company/notifications/notifications.module';
@@ -29,6 +30,7 @@ import { AppController } from './app.controller';
       }),
       inject: [ConfigService],
     }),
+    ScheduleModule.forRoot(),
     CompanyAuthModule,
     CompanyProjectsModule,
     NotificationsModule,

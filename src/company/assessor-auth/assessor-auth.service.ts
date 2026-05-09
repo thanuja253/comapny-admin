@@ -6,7 +6,7 @@ import {
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { InjectModel } from '@nestjs/mongoose';
-import * as bcrypt from 'bcrypt';
+import * as bcrypt from 'bcryptjs';
 import { Model } from 'mongoose';
 import { passwordGeneration } from '../../helpers/password.helper';
 import { MailService } from '../../mail/mail.service';
@@ -97,8 +97,8 @@ export class AssessorAuthService {
           email: assessor.email,
           mobile: assessor.mobile,
           status: assessor.status,
-          approval_status: assessor.approval_status || 'Pending',
-          profile_status: assessor.profile_status || 'Incomplete',
+          approval_status: (assessor as { approval_status?: string }).approval_status || 'Pending',
+          profile_status: (assessor as { profile_status?: string }).profile_status || 'Incomplete',
         },
         assignments: assignments.map((a) => ({
           project_id: String(a.project_id),

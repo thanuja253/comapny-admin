@@ -166,63 +166,66 @@ export class AssessorProfileService {
     const assessor = await this.assessorModel.findById(assessorId);
     if (!assessor) throw new NotFoundException({ status: 'error', message: 'Assessor not found' });
 
+    /** Mutable profile fields extend beyond strict `Assessor` typings (snake_case API + Mongo flexibility). */
+    const a = assessor as unknown as AssessorDocument & Record<string, unknown>;
+
     const filePath = (f?: Express.Multer.File[]) =>
       f?.[0] ? `uploads/assessors/${f[0].filename}` : undefined;
 
     // Strict validations for assessor self-submission.
     this.assertRequiredProfileFields(body, assessor, files);
-    const email = String(body?.email ?? assessor.email ?? '').trim().toLowerCase();
+    const email = String(body?.email ?? a.email ?? '').trim().toLowerCase();
 
     const bankInfo = await this.deriveBankDetails(
-      body?.ifsc_code ?? assessor.ifsc_code,
-      body?.bank_name ?? assessor.bank_name,
-      body?.branch_name ?? assessor.branch_name,
+      body?.ifsc_code ?? a.ifsc_code,
+      body?.bank_name ?? a.bank_name,
+      body?.branch_name ?? a.branch_name,
     );
 
-    assessor.name = String(body?.name ?? assessor.name ?? '').trim();
-    assessor.email = email;
-    assessor.mobile = String(body?.mobile ?? assessor.mobile ?? '').trim();
-    assessor.status = String(body?.status ?? assessor.status ?? '1');
+    a.name = String(body?.name ?? a.name ?? '').trim();
+    a.email = email;
+    a.mobile = String(body?.mobile ?? a.mobile ?? '').trim();
+    a.status = String(body?.status ?? a.status ?? '1');
 
-    assessor.industry_category = body?.industry_category ?? assessor.industry_category;
-    assessor.alternate_mobile = body?.alternate_mobile ?? assessor.alternate_mobile;
-    assessor.address_line_1 = body?.address_line_1 ?? assessor.address_line_1;
-    assessor.address_line_2 = body?.address_line_2 ?? assessor.address_line_2;
-    assessor.pincode = body?.pincode ?? assessor.pincode;
-    assessor.city = body?.city ?? assessor.city;
-    assessor.state = body?.state ?? assessor.state;
-    assessor.pan_number = body?.pan_number ?? assessor.pan_number;
-    assessor.enrollment_date = body?.enrollment_date ?? assessor.enrollment_date;
+    a.industry_category = body?.industry_category ?? a.industry_category;
+    a.alternate_mobile = body?.alternate_mobile ?? a.alternate_mobile;
+    a.address_line_1 = body?.address_line_1 ?? a.address_line_1;
+    a.address_line_2 = body?.address_line_2 ?? a.address_line_2;
+    a.pincode = body?.pincode ?? a.pincode;
+    a.city = body?.city ?? a.city;
+    a.state = body?.state ?? a.state;
+    a.pan_number = body?.pan_number ?? a.pan_number;
+    a.enrollment_date = body?.enrollment_date ?? a.enrollment_date;
 
-    if (body?.gst_registered !== undefined) assessor.gst_registered = this.toBool(body.gst_registered);
-    assessor.gst_number = body?.gst_number ?? assessor.gst_number;
-    if (body?.lead_assessor !== undefined) assessor.lead_assessor = this.toBool(body.lead_assessor);
-    assessor.assessor_grade = body?.assessor_grade ?? assessor.assessor_grade;
+    if (body?.gst_registered !== undefined) a.gst_registered = this.toBool(body.gst_registered);
+    a.gst_number = body?.gst_number ?? a.gst_number;
+    if (body?.lead_assessor !== undefined) a.lead_assessor = this.toBool(body.lead_assessor);
+    a.assessor_grade = body?.assessor_grade ?? a.assessor_grade;
 
-    assessor.emergency_contact_name = body?.emergency_contact_name ?? assessor.emergency_contact_name;
-    assessor.emergency_mobile = body?.emergency_mobile ?? assessor.emergency_mobile;
-    assessor.emergency_address_line_1 = body?.emergency_address_line_1 ?? assessor.emergency_address_line_1;
-    assessor.emergency_address_line_2 = body?.emergency_address_line_2 ?? assessor.emergency_address_line_2;
-    assessor.emergency_city = body?.emergency_city ?? assessor.emergency_city;
-    assessor.emergency_state = body?.emergency_state ?? assessor.emergency_state;
-    assessor.emergency_pincode = body?.emergency_pincode ?? assessor.emergency_pincode;
+    a.emergency_contact_name = body?.emergency_contact_name ?? a.emergency_contact_name;
+    a.emergency_mobile = body?.emergency_mobile ?? a.emergency_mobile;
+    a.emergency_address_line_1 = body?.emergency_address_line_1 ?? a.emergency_address_line_1;
+    a.emergency_address_line_2 = body?.emergency_address_line_2 ?? a.emergency_address_line_2;
+    a.emergency_city = body?.emergency_city ?? a.emergency_city;
+    a.emergency_state = body?.emergency_state ?? a.emergency_state;
+    a.emergency_pincode = body?.emergency_pincode ?? a.emergency_pincode;
 
-    assessor.bank_name = bankInfo.bank_name;
-    assessor.account_number = body?.account_number ?? assessor.account_number;
-    assessor.branch_name = bankInfo.branch_name;
-    assessor.ifsc_code = bankInfo.ifsc_code;
+    a.bank_name = bankInfo.bank_name;
+    a.account_number = body?.account_number ?? a.account_number;
+    a.branch_name = bankInfo.branch_name;
+    a.ifsc_code = bankInfo.ifsc_code;
 
-    assessor.profile_image = filePath(files?.profile_image) ?? assessor.profile_image;
-    assessor.biodata = filePath(files?.biodata) ?? assessor.biodata;
-    assessor.vendor_registration_form = filePath(files?.vendor_registration_form) ?? assessor.vendor_registration_form;
-    assessor.non_disclosure_agreement =
-      filePath(files?.non_disclosure_agreement) ?? assessor.non_disclosure_agreement;
-    assessor.health_declaration = filePath(files?.health_declaration) ?? assessor.health_declaration;
-    assessor.gst_declaration = filePath(files?.gst_declaration) ?? assessor.gst_declaration;
-    assessor.pan_card = filePath(files?.pan_card) ?? assessor.pan_card;
-    assessor.cancelled_cheque = filePath(files?.cancelled_cheque) ?? assessor.cancelled_cheque;
+    a.profile_image = filePath(files?.profile_image) ?? a.profile_image;
+    a.biodata = filePath(files?.biodata) ?? a.biodata;
+    a.vendor_registration_form = filePath(files?.vendor_registration_form) ?? a.vendor_registration_form;
+    a.non_disclosure_agreement =
+      filePath(files?.non_disclosure_agreement) ?? a.non_disclosure_agreement;
+    a.health_declaration = filePath(files?.health_declaration) ?? a.health_declaration;
+    a.gst_declaration = filePath(files?.gst_declaration) ?? a.gst_declaration;
+    a.pan_card = filePath(files?.pan_card) ?? a.pan_card;
+    a.cancelled_cheque = filePath(files?.cancelled_cheque) ?? a.cancelled_cheque;
 
-    const prev = ((assessor as any).document_approvals || {}) as Record<
+    const prev = (a.document_approvals || {}) as Record<
       string,
       { status?: string; remarks?: string }
     >;
@@ -243,14 +246,14 @@ export class AssessorProfileService {
         }
       }
     }
-    (assessor as any).document_approvals = docApprovals;
+    a.document_approvals = docApprovals;
 
     // Re-review only when one of the approval-required docs changes.
     if (reviewRequiredDocChanged) {
-      assessor.approval_status = 'Pending';
-      assessor.approval_remarks = '';
+      a.approval_status = 'Pending';
+      a.approval_remarks = '';
     }
-    assessor.profile_status = 'Complete';
+    a.profile_status = 'Complete';
 
     await assessor.save();
 
@@ -259,8 +262,8 @@ export class AssessorProfileService {
       message: 'Profile submitted for approval',
       data: {
         id: assessor._id.toString(),
-        approval_status: assessor.approval_status,
-        profile_status: assessor.profile_status,
+        approval_status: a.approval_status,
+        profile_status: a.profile_status,
       },
     };
   }

@@ -6,7 +6,7 @@ import {
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { InjectModel } from '@nestjs/mongoose';
-import * as bcrypt from 'bcrypt';
+import * as bcrypt from 'bcryptjs';
 import { Model } from 'mongoose';
 import { passwordGeneration } from '../../helpers/password.helper';
 import { MailService } from '../../mail/mail.service';

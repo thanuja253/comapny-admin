@@ -78,7 +78,7 @@ import { passwordGeneration } from '../../helpers/password.helper';
 import { NotificationsService } from '../notifications/notifications.service';
 import { MailService } from '../../mail/mail.service';
 import { Cron, CronExpression } from '@nestjs/schedule';
-import * as bcrypt from 'bcrypt';
+import * as bcrypt from 'bcryptjs';
 import { lookupIfscDetails } from '../../common/ifsc-lookup.util';
 
 /** View Certificate score band: 9 rows × 20 numbers (points bands 1–10 … 191–200). Normalize so frontend always gets number[][]. */
@@ -3541,6 +3541,8 @@ export class CompanyProjectsService {
       });
     }
 
+    const prevReg = project.registration_info || {};
+
     // Normalize field names (handle alternative naming from frontend)
     const normalizedData: any = { ...dto };
     
@@ -5479,6 +5481,8 @@ export class CompanyProjectsService {
       });
     }
 
+    const hadExistingProposal = !!project.proposal_document;
+
     const baseUrl = process.env.API_BASE_URL || 'https://comapny-admin.onrender.com';
     // Use Laravel-compatible path: uploads/company/{projectId}/
     const relativePath = `uploads/company/${projectId}/${file.filename}`;
@@ -7002,6 +7006,23 @@ export class CompanyProjectsService {
         ? projectAny.launch_training_report_date
         : (projectAny.launch_training_report_date as Date)?.toISOString?.()
       : null;
+
+    const coordCount = await this.countCoordinatorsForProject(String(companyId), String(projectId));
+    const sessionsRaw = projectAny.launch_training_sessions;
+    const sessions = Array.isArray(sessionsRaw)
+      ? sessionsRaw.map((s: any, idx: number) =>
+          this.formatLaunchTrainingSessionForResponse(
+            {
+              relative_path: String(s?.document_path || s?.relative_path || ''),
+              original_filename: s?.document_filename,
+              session_date: s?.session_date,
+              uploaded_at: s?.uploaded_at,
+            },
+            idx + 1,
+            baseUrl,
+          ),
+        )
+      : [];
 
     return {
       status: 'success' as const,
@@ -11206,6 +11227,15 @@ export class CompanyProjectsService {
       [PRIMARY_DATA_DOC_STATUS.NOT_ACCEPTED]: 'Not Accepted',
       [PRIMARY_DATA_DOC_STATUS.UNDER_REVIEW]: 'Under Review',
     };
+  }
+
+  /** Resolve project by Mongo id or company id, then load primary data (used by legacy unauthenticated GET). */
+  async getPrimaryDataForAdmin(projectOrCompanyId: string) {
+    const resolved = await this.resolveProjectForAdmin(projectOrCompanyId);
+    if (!resolved?.company_id) {
+      throw new NotFoundException({ status: 'error', message: 'Project not found' });
+    }
+    return this.getPrimaryData(String(resolved.company_id), String(resolved._id));
   }
 
   /**

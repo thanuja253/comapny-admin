@@ -548,5 +548,54 @@ export class CompanyAuthService {
       },
     };
   }
+
+  async getCompanyListFilters(): Promise<{ status: string; message: string; data: Record<string, unknown> }> {
+    return {
+      status: 'success',
+      message: 'Company list filters',
+      data: {
+        account_status: [
+          { value: '1', label: 'Active' },
+          { value: '0', label: 'Inactive' },
+        ],
+        verified_status: [
+          { value: '1', label: 'Verified' },
+          { value: '0', label: 'Unverified' },
+        ],
+      },
+    };
+  }
+
+  async updateCompanyStatus(payload: Record<string, unknown>): Promise<{
+    status: string;
+    message: string;
+    data?: { id: string; account_status: string };
+  }> {
+    const id =
+      payload.company_id ?? payload.companyId ?? payload.id ?? payload._id;
+    const statusRaw = payload.account_status ?? payload.status ?? payload.accountStatus;
+    if (id === undefined || id === null || statusRaw === undefined || statusRaw === null) {
+      throw new BadRequestException({
+        status: 'error',
+        message: 'company id and status are required',
+      });
+    }
+    const account_status = String(statusRaw).trim();
+    const updated = await this.companyModel
+      .findByIdAndUpdate(String(id), { $set: { account_status } }, { new: true })
+      .select('_id account_status')
+      .lean();
+    if (!updated) {
+      throw new NotFoundException({ status: 'error', message: 'Company not found' });
+    }
+    return {
+      status: 'success',
+      message: 'Company status updated',
+      data: {
+        id: String(updated._id),
+        account_status: String(updated.account_status ?? ''),
+      },
+    };
+  }
 }
 

@@ -20,6 +20,9 @@ export class Assessor {
   @Prop({ default: '1' })
   status: string;
 
+  @Prop({ default: '0' })
+  verification_status?: string;
+
   @Prop()
   industry_category?: string;
 

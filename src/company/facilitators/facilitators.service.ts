@@ -6,7 +6,7 @@ import {
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import * as bcrypt from 'bcrypt';
+import * as bcrypt from 'bcryptjs';
 import { Model } from 'mongoose';
 import { Facilitator, FacilitatorDocument } from '../schemas/facilitator.schema';
 import { CreateFacilitatorProfileDto } from './dto/create-facilitator-profile.dto';
