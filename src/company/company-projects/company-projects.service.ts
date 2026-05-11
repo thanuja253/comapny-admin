@@ -76,6 +76,7 @@ import type { Response } from 'express';
 import { getCertificationType } from '../../helpers/certification.helper';
 import { passwordGeneration } from '../../helpers/password.helper';
 import { NotificationsService } from '../notifications/notifications.service';
+import { NotifyType } from '../schemas/notification-log.schema';
 import { MailService } from '../../mail/mail.service';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import * as bcrypt from 'bcryptjs';
@@ -575,6 +576,53 @@ export class CompanyProjectsService {
       .catch((e) =>
         console.error('[Step Transition Notification] Failed:', e?.message || e),
       );
+  }
+
+  private async getFacilitatorRecipient(
+    companyId: string,
+    projectId: string,
+  ): Promise<{ id: string; email?: string; name?: string } | null> {
+    const cf = await this.companyFacilitatorModel
+      .findOne({ company_id: companyId, project_id: projectId })
+      .populate('facilitator_id')
+      .lean();
+    if (!cf || !(cf as any).facilitator_id) return null;
+    const fac = (cf as any).facilitator_id;
+    return {
+      id: fac._id?.toString?.() || String(fac),
+      email: fac.email,
+      name: fac.name,
+    };
+  }
+
+  private async notifyFlowStakeholders(
+    companyId: string,
+    projectId: string,
+    title: string,
+    content: string,
+    options?: { category?: string; includeAdmin?: boolean; includeFacilitator?: boolean },
+  ): Promise<void> {
+    const category = options?.category ?? 'update';
+    const includeAdmin = options?.includeAdmin !== false;
+    const includeFacilitator = options?.includeFacilitator !== false;
+    await this.notificationsService
+      .create(title, content, 'C', companyId, category)
+      .catch((e) => console.error('[Flow Notification] Company notification failed:', e?.message || e));
+    if (includeFacilitator) {
+      const facilitator = await this.getFacilitatorRecipient(companyId, projectId);
+      if (facilitator?.id) {
+        await this.notificationsService
+          .create(title, content, 'F', facilitator.id, category)
+          .catch((e) =>
+            console.error('[Flow Notification] Facilitator notification failed:', e?.message || e),
+          );
+      }
+    }
+    if (includeAdmin) {
+      await this.notificationsService
+        .create(title, content, 'A' as NotifyType, null, category)
+        .catch((e) => console.error('[Flow Notification] Admin notification failed:', e?.message || e));
+    }
   }
 
   private parseDdMmYyyyToDate(value: string): Date | null {
@@ -2459,6 +2507,12 @@ export class CompanyProjectsService {
       milestone_flow: 18,
       milestone_completed: true,
     });
+    await this.notifyFlowStakeholders(
+      String(project.company_id),
+      String(project._id),
+      'Certificate uploaded',
+      `GreenCo Team uploaded the certificate for project ${project.project_id || projectId}.`,
+    );
     return {
       status: 'success',
       message: 'Certificate uploaded successfully',
@@ -2524,6 +2578,12 @@ export class CompanyProjectsService {
       milestone_flow: 23,
       milestone_completed: true,
     });
+    await this.notifyFlowStakeholders(
+      String(project.company_id),
+      String(project._id),
+      'Feedback report uploaded',
+      `GreenCo Team uploaded the feedback report for project ${project.project_id || projectId}.`,
+    );
     return {
       status: 'success',
       message: 'Feedback uploaded successfully',
@@ -6245,6 +6305,16 @@ export class CompanyProjectsService {
       }
     }
 
+    if (updates.document_status === 1) {
+      const docDetails = (doc as any).description || (doc as any).document_type || 'Assessment submittal';
+      await this.notifyFlowStakeholders(
+        companyId,
+        projectId,
+        'Assessment submittal accepted',
+        `Assessment submittal accepted by GreenCo Team (${docDetails}).`,
+      );
+    }
+
     return {
       status: 'success',
       message: 'Assessment submittal updated successfully',
@@ -9376,6 +9446,14 @@ export class CompanyProjectsService {
       }
     }
 
+    const invoiceLabel = invoice.payment_for === PAYMENT_FOR_PROFORMA ? 'Proforma Invoice' : 'Tax Invoice';
+    await this.notifyFlowStakeholders(
+      companyId,
+      projectId,
+      'Payment submitted',
+      `Payment submitted for ${invoiceLabel} (${dto.payment_type}). GreenCo Team will review it.`,
+    );
+
     return {
       status: 'success',
       message: 'Payment submitted successfully',
@@ -10219,15 +10297,13 @@ export class CompanyProjectsService {
       next_activities_id: project.next_activities_id,
     });
 
-    // In-app: notify Company (GreenCo Team has create new project id)
-    this.notificationsService
-      .create(
-        'GreenCo Team has create new project id',
-        `Company ${company.name} GreenCo Team has create new project id`,
-        'C',
-        companyId,
-      )
-      .catch((err) => console.error('Notification create failed:', err));
+    await this.notifyFlowStakeholders(
+      companyId,
+      projectId,
+      'Project code assigned',
+      `GreenCo Team assigned project code ${projectCode} for your project.`,
+      { includeFacilitator: true, includeAdmin: false },
+    );
 
     // LOG ACTIVITY 6: CII to provide Project Code
     await this.companyActivityModel.create({
@@ -12262,6 +12338,29 @@ export class CompanyProjectsService {
   }
 
   /**
+   * Open/legacy variant used by endpoints without auth headers.
+   * Resolves the project first, then routes the save through the same company-scoped logic.
+   */
+  async savePrimaryDataBySectionOpen(
+    projectOrCompanyId: string,
+    formType: string,
+    payload: any,
+    finalSubmit?: boolean,
+  ) {
+    const resolved = await this.resolveProjectForAdmin(projectOrCompanyId);
+    if (!resolved?.company_id) {
+      throw new NotFoundException({ status: 'error', message: 'Project not found' });
+    }
+    return this.savePrimaryDataBySection(
+      String(resolved.company_id),
+      String(resolved._id),
+      formType,
+      payload,
+      finalSubmit,
+    );
+  }
+
+  /**
    * Store Primary Data (field-by-field): update or insert from doc array. No final submit.
    * Accepts doc as array or object keyed by data_id (same shape as /save payload).
    */
@@ -12356,14 +12455,12 @@ export class CompanyProjectsService {
       milestone_completed: true,
     });
 
-    this.notificationsService
-      .create(
-        'Primary Data Submitted',
-        'Your Primary Data form has been submitted successfully. GreenCo Team will review it.',
-        'C',
-        companyId,
-      )
-      .catch((e) => console.error('Primary data submission notification failed:', e));
+    await this.notifyFlowStakeholders(
+      companyId,
+      projectId,
+      'Primary data submitted',
+      'Primary data submitted successfully. GreenCo Team will review it.',
+    );
 
     return { status: 'success', message: 'Success! Primary Data Submitted.' };
   }
@@ -12400,6 +12497,12 @@ export class CompanyProjectsService {
       milestone_flow: 9,
       milestone_completed: false,
     });
+    await this.notifyFlowStakeholders(
+      companyId,
+      projectId,
+      'Primary data documents re-submitted',
+      'Primary data supporting documents were re-submitted and are now under GreenCo Team review.',
+    );
 
     return { status: 'success', message: 'Success! Primary Data Documents Uploaded Successfully!' };
   }

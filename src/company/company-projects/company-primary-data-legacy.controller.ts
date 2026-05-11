@@ -1,6 +1,4 @@
-import { Body, Controller, Get, Param, Post, Request, UseGuards } from '@nestjs/common';
-import { AccountStatusGuard } from '../company-auth/guards/account-status.guard';
-import { JwtAuthGuard } from '../company-auth/guards/jwt-auth.guard';
+import { Body, Controller, Get, Param, Post, Request } from '@nestjs/common';
 import { CompanyProjectsService } from './company-projects.service';
 
 /**
@@ -33,7 +31,6 @@ export class CompanyPrimaryDataLegacyController {
   }
 
   @Post('save/:projectId')
-  @UseGuards(JwtAuthGuard, AccountStatusGuard)
   async savePrimaryDataLegacy(
     @Request() req,
     @Param('projectId') projectId: string,
@@ -41,8 +38,17 @@ export class CompanyPrimaryDataLegacyController {
   ): Promise<any> {
     const formType = body?.form_type ?? 'all';
     const payload = body?.data ?? body?.doc ?? (formType && body?.[formType]) ?? body;
+    const companyId = req?.user?.userId;
+    if (!companyId) {
+      return this.companyProjectsService.savePrimaryDataBySectionOpen(
+        projectId,
+        formType,
+        payload,
+        body?.final_submit,
+      );
+    }
     return this.companyProjectsService.savePrimaryDataBySection(
-      req.user.userId,
+      companyId,
       projectId,
       formType,
       payload,

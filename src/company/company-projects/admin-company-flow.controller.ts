@@ -1145,6 +1145,7 @@ export class AdminCompanyFlowController {
   }
 
   @Get('company/primary_data/:companyProject')
+  @UseGuards()
   async getPrimaryDataGiLegacy(
     @Param('companyProject') companyProject: string,
   ): Promise<any> {
