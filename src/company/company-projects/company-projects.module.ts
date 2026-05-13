@@ -5,7 +5,10 @@ import { AdminCompanyFlowController } from './admin-company-flow.controller';
 import { AdminLaunchTrainingController } from './admin-launch-training.controller';
 import { AssessorCompanyProjectsController } from './assessor-company-projects.controller';
 import { FacilitatorFinanceV2Controller } from './facilitator-finance-v2.controller';
-import { FacilitatorLaunchTrainingController } from './facilitator-launch-training.controller';
+import {
+  FacilitatorCompanyProjectsPrimaryDataReviewController,
+  FacilitatorLaunchTrainingController,
+} from './facilitator-launch-training.controller';
 import { CompanyProjectsService } from './company-projects.service';
 import {
   CompanyProject,
@@ -105,6 +108,7 @@ import { MailModule } from '../../mail/mail.module';
     AssessorCompanyProjectsController,
     FacilitatorFinanceV2Controller,
     FacilitatorLaunchTrainingController,
+    FacilitatorCompanyProjectsPrimaryDataReviewController,
   ],
   providers: [CompanyProjectsService],
   exports: [CompanyProjectsService],

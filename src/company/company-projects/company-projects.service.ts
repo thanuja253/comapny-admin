@@ -7178,6 +7178,51 @@ export class CompanyProjectsService {
     return this.getLaunchTrainingProgramPayload(resolved.companyId, resolved.projectId);
   }
 
+  /** Primary data review for facilitator portal (assigned projects only; any process type). */
+  async getPrimaryDataReviewForFacilitator(facilitatorId: string, projectId: string) {
+    if (!Types.ObjectId.isValid(projectId)) {
+      throw new BadRequestException({ status: 'error', message: 'Invalid project id' });
+    }
+    const project = await this.projectModel.findById(projectId).select('company_id').lean();
+    if (!project || !(project as any).company_id) {
+      throw new NotFoundException({ status: 'error', message: 'Project not found' });
+    }
+    const assigned = await this.companyFacilitatorModel
+      .findOne({ facilitator_id: facilitatorId, project_id: projectId })
+      .select('_id')
+      .lean();
+    if (!assigned) {
+      throw new ForbiddenException({
+        status: 'error',
+        message: 'Facilitator is not assigned to this project.',
+      });
+    }
+    return this.getPrimaryDataForApproval(projectId);
+  }
+
+  /** Full primary data payload for facilitator (assigned projects only). */
+  async getPrimaryDataForFacilitator(facilitatorId: string, projectId: string) {
+    if (!Types.ObjectId.isValid(projectId)) {
+      throw new BadRequestException({ status: 'error', message: 'Invalid project id' });
+    }
+    const project = await this.projectModel.findById(projectId).select('company_id').lean();
+    if (!project || !(project as any).company_id) {
+      throw new NotFoundException({ status: 'error', message: 'Project not found' });
+    }
+    const companyId = String((project as any).company_id);
+    const assigned = await this.companyFacilitatorModel
+      .findOne({ facilitator_id: facilitatorId, project_id: projectId })
+      .select('_id')
+      .lean();
+    if (!assigned) {
+      throw new ForbiddenException({
+        status: 'error',
+        message: 'Facilitator is not assigned to this project.',
+      });
+    }
+    return this.getPrimaryData(companyId, projectId);
+  }
+
   async addLaunchTrainingSessionForFacilitator(
     facilitatorId: string,
     projectId: string,

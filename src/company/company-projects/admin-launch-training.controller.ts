@@ -20,14 +20,28 @@ import {
 /**
  * Admin Launch & Training — GET + POST under one controller prefix.
  *
- * Base path: `/api/admin/projects` — short `@Get` / `@Post` segments avoid fragile full-path metadata on `@Controller()`.
- * `main.ts` rewrites `/admin/projects/*` → `/api/admin/projects/*`.
+ * Base paths: `/api/admin/projects` and `/admin/projects` (legacy).
+ * Primary-data GET aliases live here so they share the same prefix as launch-training routes.
  *
  * Company API aliases live on `CompanyProjectsController` (`/api/company/projects/.../launch-training`).
  */
-@Controller('api/admin/projects')
+@Controller(['api/admin/projects', 'admin/projects'])
 export class AdminLaunchTrainingController {
   constructor(private readonly companyProjectsService: CompanyProjectsService) {}
+
+  /**
+   * Primary data (admin / facilitator UIs often call these under `/api/admin/projects/...`).
+   * Registered here on the `api/admin/projects` controller prefix so routing matches launch-training.
+   */
+  @Get(':projectId/primary-data')
+  async getPrimaryDataForAdmin(@Param('projectId') projectId: string): Promise<any> {
+    return this.companyProjectsService.getPrimaryDataForAdmin(projectId);
+  }
+
+  @Get(':projectId/primary-data/review')
+  async getPrimaryDataReviewForAdmin(@Param('projectId') projectId: string): Promise<any> {
+    return this.companyProjectsService.getPrimaryDataForApproval(projectId);
+  }
 
   @Get(':projectId/launch-training')
   async getLaunchTraining(@Param('projectId') projectId: string): Promise<any> {

@@ -159,6 +159,21 @@ export class AdminCompanyFlowController {
     return this.companyProjectsService.getProjectAssignmentsForAdmin(projectId);
   }
 
+  /**
+   * Launch & Training GET — same payload as `CompanyProjectsController` company aliases.
+   * Registered here (not only on `AdminLaunchTrainingController`) so callers that send a
+   * company Bearer token are not rejected by admin-only guards on other route registrations.
+   */
+  @Get('api/admin/projects/:projectId/launch-training')
+  @Get('admin/projects/:projectId/launch-training')
+  @Get('api/admin/projects/:projectId/launch-training-program')
+  @Get('admin/projects/:projectId/launch-training-program')
+  async getLaunchTrainingProgramForAdminOpen(
+    @Param('projectId') projectId: string,
+  ): Promise<any> {
+    return this.companyProjectsService.getLaunchTrainingProgramForAdmin(projectId);
+  }
+
   @Post('api/admin/projects/:projectId/assign-coordinator')
   @Post('admin/projects/:projectId/assign-coordinator')
   async assignCoordinatorForAdmin(

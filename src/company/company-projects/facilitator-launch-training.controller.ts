@@ -30,6 +30,30 @@ import { FacilitatorAccountStatusGuard } from '../facilitator-auth/guards/facili
 export class FacilitatorLaunchTrainingController {
   constructor(private readonly companyProjectsService: CompanyProjectsService) {}
 
+  @Get(':projectId/primary-data')
+  @UseGuards(FacilitatorJwtAuthGuard, FacilitatorAccountStatusGuard)
+  async getPrimaryDataForFacilitator(
+    @Request() req,
+    @Param('projectId') projectId: string,
+  ): Promise<any> {
+    return this.companyProjectsService.getPrimaryDataForFacilitator(
+      req.user.facilitatorId,
+      projectId,
+    );
+  }
+
+  @Get(':projectId/primary-data/review')
+  @UseGuards(FacilitatorJwtAuthGuard, FacilitatorAccountStatusGuard)
+  async getPrimaryDataReviewForFacilitator(
+    @Request() req,
+    @Param('projectId') projectId: string,
+  ): Promise<any> {
+    return this.companyProjectsService.getPrimaryDataReviewForFacilitator(
+      req.user.facilitatorId,
+      projectId,
+    );
+  }
+
   @Get(':projectId/launch-and-training')
   async getLaunchAndTraining(@Param('projectId') projectId: string): Promise<any> {
     return this.companyProjectsService.getLaunchAndTrainingByProjectId(projectId);
@@ -177,3 +201,23 @@ export class FacilitatorLaunchTrainingController {
   }
 }
 
+/**
+ * Facilitator UIs that use the company API base (`/api/company/projects/...`) need this alias.
+ * Canonical routes remain on {@link FacilitatorLaunchTrainingController} (`/api/facilitator/projects/...`).
+ */
+@Controller('api/company/projects')
+export class FacilitatorCompanyProjectsPrimaryDataReviewController {
+  constructor(private readonly companyProjectsService: CompanyProjectsService) {}
+
+  @Get(':projectId/primary-data/review')
+  @UseGuards(FacilitatorJwtAuthGuard, FacilitatorAccountStatusGuard)
+  async getPrimaryDataReviewAlias(
+    @Request() req,
+    @Param('projectId') projectId: string,
+  ): Promise<any> {
+    return this.companyProjectsService.getPrimaryDataReviewForFacilitator(
+      req.user.facilitatorId,
+      projectId,
+    );
+  }
+}
