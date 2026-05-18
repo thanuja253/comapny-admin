@@ -9,7 +9,8 @@ export class JwtAuthGuard extends AuthGuard('jwt') {
     const path = String(request?.path || request?.url || '');
     const isProposalWrite =
       ['POST', 'PUT', 'PATCH'].includes(method) &&
-      /\/api\/company\/projects\/[^/]+\/proposal-document(?:\/reupload)?$/.test(path);
+      (/\/api\/company\/projects\/[^/]+\/proposal-document(?:\/reupload)?$/.test(path) ||
+        /\/api\/company\/projects\/[^/]+\/proposal-workorder-documents\/reupload$/.test(path));
 
     if (isProposalWrite) {
       return true;

@@ -585,8 +585,13 @@ export class CompanyProjectsController {
    * 3. Optional refetch: `GET …/proposal-workorder-documents/refresh` with `cache: 'no-store'`.
    *
    * Same multipart rules as `POST …/proposal-document` (first upload).
-   * POST|PUT|PATCH …/proposal-document/reupload
+   *
+   * Preferred (same tab as GET combined docs): `POST|PUT|PATCH …/proposal-workorder-documents/reupload`
+   * Alias: `POST|PUT|PATCH …/proposal-document/reupload`
    */
+  @Post(':projectId/proposal-workorder-documents/reupload')
+  @Put(':projectId/proposal-workorder-documents/reupload')
+  @Patch(':projectId/proposal-workorder-documents/reupload')
   @Post(':projectId/proposal-document/reupload')
   @Put(':projectId/proposal-document/reupload')
   @Patch(':projectId/proposal-document/reupload')
@@ -648,6 +653,12 @@ export class CompanyProjectsController {
       throw new BadRequestException({
         status: 'error',
         message: 'No file uploaded. Use proposal_document, proposalDocument, or file.',
+      });
+    }
+    if (!file.size || file.size < 1) {
+      throw new BadRequestException({
+        status: 'error',
+        message: 'Uploaded file is empty. Send a real PDF in multipart field proposal_document.',
       });
     }
     return this.companyProjectsService.replaceProposalDocumentByProjectId(projectId, file);
@@ -723,6 +734,12 @@ export class CompanyProjectsController {
       throw new BadRequestException({
         status: 'error',
         message: 'No file uploaded. Use proposal_document, proposalDocument, or file.',
+      });
+    }
+    if (!file.size || file.size < 1) {
+      throw new BadRequestException({
+        status: 'error',
+        message: 'Uploaded file is empty. Send a real PDF in multipart field proposal_document.',
       });
     }
 
@@ -920,7 +937,7 @@ export class CompanyProjectsController {
 
   /**
    * Get Proposal/Work Order Documents (combined endpoint).
-   * When `proposal_badge_label` is `"Rejected by company"`, `proposal_reupload_path` is set — use POST|PUT|PATCH there for the single proposal reupload API.
+   * When `proposal_badge_label` is `"Rejected by company"`, `proposal_reupload_path` is set — use POST|PUT|PATCH on that path (same host/port as this GET, e.g. `:3019`).
    * GET /api/company/projects/:projectId/proposal-workorder-documents
    */
   @Get(':projectId/proposal-workorder-documents')

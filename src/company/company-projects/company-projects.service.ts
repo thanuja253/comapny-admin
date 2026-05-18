@@ -231,6 +231,37 @@ function proposalDocumentFileMtimeMs(proposalRaw: string): number | null {
   return null;
 }
 
+/** Persisted path for a multer PDF — always derived from the file on disk when possible. */
+function resolveProposalStorageRelativePath(
+  projectId: string,
+  file: Express.Multer.File,
+): string {
+  const absoluteMulterPath =
+    (file as Express.Multer.File & { path?: string }).path ||
+    join(String((file as any).destination || ''), file.filename);
+  const cwd = process.cwd();
+  if (absoluteMulterPath && fs.existsSync(absoluteMulterPath)) {
+    const rel = relative(cwd, absoluteMulterPath).replace(/\\/g, '/');
+    if (rel && !rel.startsWith('..')) {
+      return rel.replace(/^\/+/, '');
+    }
+  }
+  return `uploads/company/${projectId}/${file.filename}`;
+}
+
+function removeProposalFileIfLocal(proposalRaw: string): void {
+  const trimmed = String(proposalRaw || '').trim();
+  if (!trimmed || trimmed.startsWith('http')) return;
+  const normalized = trimmed.replace(/^\/+/, '');
+  const oldFull = join(process.cwd(), normalized);
+  if (!normalized || !fs.existsSync(oldFull)) return;
+  try {
+    fs.unlinkSync(oldFull);
+  } catch (e) {
+    console.warn('[Proposal Document] Could not remove old file:', (e as any)?.message || e);
+  }
+}
+
 /**
  * Latest work order “rejected / not accepted” is `wo_status = 2` (schema default is number).
  * Values sometimes arrive as string `"2"` from Mongo/JSON — use `Number(woStatus) === 2` for reliable checks.
@@ -5543,13 +5574,31 @@ export class CompanyProjectsService {
 
     const hadExistingProposal = !!project.proposal_document;
 
-    const baseUrl = process.env.API_BASE_URL || 'https://comapny-admin.onrender.com';
-    // Use Laravel-compatible path: uploads/company/{projectId}/
-    const relativePath = `uploads/company/${projectId}/${file.filename}`;
+    const relativePath = resolveProposalStorageRelativePath(projectId, file);
+    const fullStored = join(process.cwd(), relativePath);
+    if (!fs.existsSync(fullStored)) {
+      throw new BadRequestException({
+        status: 'error',
+        message:
+          'Uploaded file could not be stored on the server. Retry the upload and ensure the API path uses the project Mongo _id.',
+      });
+    }
+
+    const previousProposalPath = hadExistingProposal
+      ? String(project.proposal_document || '').trim()
+      : '';
 
     // Save proposal document as relative path so server can move host/base URL safely.
     project.proposal_document = relativePath;
     await project.save();
+
+    if (
+      hadExistingProposal &&
+      previousProposalPath &&
+      previousProposalPath !== relativePath
+    ) {
+      removeProposalFileIfLocal(previousProposalPath);
+    }
 
     // Generate company registration ID if not exists (similar to Laravel flow)
     const company = await this.companyModel.findById(companyId);
@@ -5721,38 +5770,34 @@ export class CompanyProjectsService {
         data: {
           latest_wo_status: latestWo?.wo_status ?? null,
           documents_path: `GET /api/company/projects/${projectId}/proposal-workorder-documents`,
+          reupload_path: `POST /api/company/projects/${projectId}/proposal-workorder-documents/reupload`,
         },
       });
     }
 
-    const oldRaw = String(project.proposal_document || '').trim();
-    if (oldRaw && !oldRaw.startsWith('http')) {
-      const normalized = oldRaw.replace(/^\/+/, '');
-      const oldFull = join(process.cwd(), normalized);
-      if (normalized && fs.existsSync(oldFull)) {
-        try {
-          fs.unlinkSync(oldFull);
-        } catch (e) {
-          console.warn('[Proposal Document] Could not remove old file:', (e as any)?.message || e);
-        }
-      }
+    const previousProposalPath = String(project.proposal_document || '').trim();
+
+    const relativePath = resolveProposalStorageRelativePath(projectId, file);
+    const fullStored = join(process.cwd(), relativePath);
+    if (!fs.existsSync(fullStored)) {
+      throw new BadRequestException({
+        status: 'error',
+        message:
+          'Uploaded file could not be stored on the server. Retry the upload and ensure the API path uses the project Mongo _id.',
+      });
     }
 
-    const absoluteMulterPath =
-      (file as Express.Multer.File & { path?: string }).path ||
-      join(String((file as any).destination || ''), file.filename);
-    let relativePath = `uploads/company/${projectId}/${file.filename}`;
-    const cwd = process.cwd();
-    if (absoluteMulterPath && fs.existsSync(absoluteMulterPath)) {
-      const rel = relative(cwd, absoluteMulterPath).replace(/\\/g, '/');
-      if (rel && !rel.startsWith('..')) {
-        relativePath = rel.replace(/^\/+/, '');
-      }
-    }
     project.proposal_document = relativePath;
     // Company’s turn again: re-upload work order against the revised proposal (same cycle as first time after proposal).
     project.next_activities_id = 4;
     await project.save();
+
+    if (
+      previousProposalPath &&
+      previousProposalPath !== relativePath
+    ) {
+      removeProposalFileIfLocal(previousProposalPath);
+    }
 
     await this.companyActivityModel.create({
       company_id: companyId,
@@ -6358,7 +6403,7 @@ export class CompanyProjectsService {
       Boolean(hasProposalDoc) && (woRejected || noWorkOrderRow || woStatusUnset);
     const proposal_badge_label =
       hasProposalDoc && woRejected ? 'Rejected by company' : null;
-    const proposalReuploadPath = `/api/company/projects/${projectId}/proposal-document/reupload`;
+    const proposalReuploadPath = `/api/company/projects/${projectId}/proposal-workorder-documents/reupload`;
     const proposalUploadHints = {
       proposal_badge_label,
       /** When set, use POST|PUT|PATCH on this path with multipart PDF (single proposal reupload API). */
@@ -6368,14 +6413,15 @@ export class CompanyProjectsService {
     if (hasProposalDoc) {
       const proposalRaw = String(proposalDocValue).trim();
       const storageFilename = proposalRaw.split('/').pop() || 'proposal.pdf';
+      const fileOnDisk = proposalDocumentFileMtimeMs(proposalRaw) != null;
       const { document_url, document_cache_bust } = buildProposalDocumentViewUrl(
         projectId,
         proposalRaw,
         projectAny.updatedAt,
       );
       response.proposal_document = {
-        has_document: true,
-        is_proposal_pdf_on_server: true,
+        has_document: fileOnDisk,
+        is_proposal_pdf_on_server: fileOnDisk,
         /** Same viewer URL as GET …/proposal-document (`/proposal-document/file?v=…`), not raw `/uploads/…`. */
         document_url,
         document_cache_bust,
