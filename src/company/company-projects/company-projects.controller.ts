@@ -580,9 +580,9 @@ export class CompanyProjectsController {
    * **Proposal reupload (CII)** — allowed when there is **no** work-order row, WO **status is unset**, or latest WO is **rejected** (`wo_status = 2`). Same flags as `proposal_reupload_path` / `can_replace_proposal` on GET combined/proposal-document.
    *
    * **Client flow**
-   * 1. `POST|PUT|PATCH` this URL with `multipart/form-data` and field `proposal_document` | `proposalDocument` | `file` (PDF).
-   * 2. `response.data` is **proposal-only** (no `work_order` root or inside `proposal_workorder_documents`). For WO + proposal together, `GET …/proposal-workorder-documents/refresh`.
-   * 3. Optional refetch: `GET …/proposal-workorder-documents/refresh` with `cache: 'no-store'`.
+   * 1. `POST|PUT|PATCH` with `multipart/form-data` field `proposal_document` | `proposalDocument` | `file` (PDF, non-empty).
+   * 2. `response.data` matches `GET …/proposal-workorder-documents` (`proposal_document`, `work_order`, `proposal_workorder_documents`).
+   * 3. Optional refetch: `GET …/proposal-workorder-documents` or `…/refresh` with `cache: 'no-store'`.
    *
    * Same multipart rules as `POST …/proposal-document` (first upload).
    *

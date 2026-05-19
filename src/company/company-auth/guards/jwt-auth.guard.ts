@@ -1,5 +1,6 @@
 import { ExecutionContext, Injectable } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
+import { isProposalDocumentWritePath } from '../proposal-document-write-path.util';
 
 @Injectable()
 export class JwtAuthGuard extends AuthGuard('jwt') {
@@ -7,12 +8,7 @@ export class JwtAuthGuard extends AuthGuard('jwt') {
     const request = context.switchToHttp().getRequest();
     const method = String(request?.method || '').toUpperCase();
     const path = String(request?.path || request?.url || '');
-    const isProposalWrite =
-      ['POST', 'PUT', 'PATCH'].includes(method) &&
-      (/\/api\/company\/projects\/[^/]+\/proposal-document(?:\/reupload)?$/.test(path) ||
-        /\/api\/company\/projects\/[^/]+\/proposal-workorder-documents\/reupload$/.test(path));
-
-    if (isProposalWrite) {
+    if (['POST', 'PUT', 'PATCH'].includes(method) && isProposalDocumentWritePath(path)) {
       return true;
     }
 

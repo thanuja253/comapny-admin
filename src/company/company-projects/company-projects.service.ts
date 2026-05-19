@@ -69,7 +69,7 @@ import { ReportsQueryDto } from './dto/reports-query.dto';
 import { pickCoordinatorIdFromBody } from './dto/assign-coordinator.dto';
 import { CreateCoordinatorDto } from './dto/create-coordinator.dto';
 import { UpdateCoordinatorDto } from './dto/update-coordinator.dto';
-import { join, relative } from 'path';
+import { basename, join, relative } from 'path';
 import * as fs from 'fs';
 import { GridFSBucket } from 'mongodb';
 import type { Response } from 'express';
@@ -247,6 +247,43 @@ function resolveProposalStorageRelativePath(
     }
   }
   return `uploads/company/${projectId}/${file.filename}`;
+}
+
+/** Ensures the PDF lives under `uploads/company/{mongoProjectId}/` (moves from URL-param folder if needed). */
+function normalizeProposalStoragePath(
+  projectId: string,
+  file: Express.Multer.File,
+): string {
+  const relativePath = resolveProposalStorageRelativePath(projectId, file);
+  const normalized = relativePath.replace(/^\/+/, '');
+  const expectedPrefix = `uploads/company/${projectId}/`;
+  if (normalized.startsWith(expectedPrefix)) {
+    return normalized;
+  }
+  const cwd = process.cwd();
+  const srcFull = join(cwd, normalized);
+  if (!fs.existsSync(srcFull)) {
+    return normalized;
+  }
+  const destDir = join(cwd, 'uploads', 'company', projectId);
+  if (!fs.existsSync(destDir)) {
+    fs.mkdirSync(destDir, { recursive: true });
+  }
+  const destName = basename(normalized) || file.filename || `proposal-${Date.now()}.pdf`;
+  const destFull = join(destDir, destName);
+  if (srcFull !== destFull) {
+    try {
+      fs.renameSync(srcFull, destFull);
+    } catch {
+      fs.copyFileSync(srcFull, destFull);
+      try {
+        fs.unlinkSync(srcFull);
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+  return `${expectedPrefix}${destName}`;
 }
 
 function removeProposalFileIfLocal(proposalRaw: string): void {
@@ -5574,7 +5611,7 @@ export class CompanyProjectsService {
 
     const hadExistingProposal = !!project.proposal_document;
 
-    const relativePath = resolveProposalStorageRelativePath(projectId, file);
+    const relativePath = normalizeProposalStoragePath(projectId, file);
     const fullStored = join(process.cwd(), relativePath);
     if (!fs.existsSync(fullStored)) {
       throw new BadRequestException({
@@ -5691,6 +5728,8 @@ export class CompanyProjectsService {
     });
 
     const pw = proposalWorkorder.data as { proposal_document?: unknown; work_order?: unknown };
+    const refreshPath = `/api/company/projects/${projectId}/proposal-workorder-documents/refresh`;
+    const reuploadPath = `/api/company/projects/${projectId}/proposal-workorder-documents/reupload`;
     return {
       status: 'success',
       message: hadExistingProposal
@@ -5702,6 +5741,8 @@ export class CompanyProjectsService {
         proposal_document: pw?.proposal_document ?? null,
         work_order: pw?.work_order ?? null,
         proposal_workorder_documents: proposalWorkorder.data,
+        proposal_refresh_path: refreshPath,
+        proposal_reupload_path: hadExistingProposal ? reuploadPath : null,
         project_id: projectId,
         next_activities_id: project.next_activities_id,
         reuploaded: hadExistingProposal,
@@ -5777,7 +5818,7 @@ export class CompanyProjectsService {
 
     const previousProposalPath = String(project.proposal_document || '').trim();
 
-    const relativePath = resolveProposalStorageRelativePath(projectId, file);
+    const relativePath = normalizeProposalStoragePath(projectId, file);
     const fullStored = join(process.cwd(), relativePath);
     if (!fs.existsSync(fullStored)) {
       throw new BadRequestException({
@@ -5839,20 +5880,23 @@ export class CompanyProjectsService {
     const refreshed = await this.getProposalDocument(companyId, projectId);
     const proposalWorkorder = await this.getProposalWorkOrderDocuments(companyId, projectId);
     const pw = proposalWorkorder.data as { proposal_document?: unknown; work_order?: unknown };
-    const { work_order: _woRoot, ...refreshedProposalOnly } = refreshed.data as Record<string, unknown>;
+    const reuploadPath = `/api/company/projects/${projectId}/proposal-workorder-documents/reupload`;
+    const refreshPath = `/api/company/projects/${projectId}/proposal-workorder-documents/refresh`;
     return {
       status: 'success',
       message: 'Proposal document replaced successfully',
       data: {
-        ...refreshedProposalOnly,
+        ...refreshed.data,
         proposal_document: pw?.proposal_document ?? null,
-        /** Proposal reupload response is proposal-only; no `work_order`. Use GET …/proposal-workorder-documents for combined tab data. */
-        proposal_workorder_documents: {
-          proposal_document: pw?.proposal_document ?? null,
-        },
+        work_order: pw?.work_order ?? null,
+        /** Same shape as GET …/proposal-workorder-documents — use to refresh UI without another fetch. */
+        proposal_workorder_documents: proposalWorkorder.data,
+        proposal_reupload_path: reuploadPath,
+        proposal_refresh_path: refreshPath,
         project_id: projectId,
         next_activities_id: 4,
         replaced: true,
+        reuploaded: true,
       },
     };
   }
@@ -6404,10 +6448,12 @@ export class CompanyProjectsService {
     const proposal_badge_label =
       hasProposalDoc && woRejected ? 'Rejected by company' : null;
     const proposalReuploadPath = `/api/company/projects/${projectId}/proposal-workorder-documents/reupload`;
+    const proposalRefreshPath = `/api/company/projects/${projectId}/proposal-workorder-documents/refresh`;
     const proposalUploadHints = {
       proposal_badge_label,
       /** When set, use POST|PUT|PATCH on this path with multipart PDF (single proposal reupload API). */
       proposal_reupload_path: proposalReuploadEligible ? proposalReuploadPath : null,
+      proposal_refresh_path: proposalRefreshPath,
     };
 
     if (hasProposalDoc) {
@@ -6422,6 +6468,8 @@ export class CompanyProjectsService {
       response.proposal_document = {
         has_document: fileOnDisk,
         is_proposal_pdf_on_server: fileOnDisk,
+        /** True when Mongo has a path but this API instance has no file on disk (wrong port or missing upload). */
+        file_missing_on_server: !fileOnDisk,
         /** Same viewer URL as GET …/proposal-document (`/proposal-document/file?v=…`), not raw `/uploads/…`. */
         document_url,
         document_cache_bust,
