@@ -45,6 +45,11 @@ import {
   MasterChecklistSectorDocument,
 } from '../schemas/master-checklist-sector.schema';
 import { RegistrationInfoDto } from './dto/registration-info.dto';
+import {
+  extractRegistrationTaxIdsFromDto,
+  findRegistrationTaxIdConflicts,
+  throwIfRegistrationTaxIdConflicts,
+} from './registration-tax-id-uniqueness';
 import { SubmitPaymentDto } from './dto/submit-payment.dto';
 import { UpdateInvoiceApprovalDto } from './dto/update-invoice-approval.dto';
 import { CreateProformaInvoiceV2Dto } from './dto/create-proforma-invoice-v2.dto';
@@ -3695,6 +3700,17 @@ export class CompanyProjectsService {
       normalizedData.gstin = dto.gstin_no;
       delete normalizedData.gstin_no;
     }
+
+    const taxIdsToValidate = extractRegistrationTaxIdsFromDto({
+      ...(prevReg as Record<string, unknown>),
+      ...(normalizedData as Record<string, unknown>),
+    });
+    const taxIdConflicts = await findRegistrationTaxIdConflicts(this.projectModel, {
+      excludeProjectId: projectId,
+      excludeCompanyId: companyId,
+      ...taxIdsToValidate,
+    });
+    throwIfRegistrationTaxIdConflicts(taxIdConflicts);
 
     // Handle file uploads
     const baseUrl = process.env.API_BASE_URL || 'https://comapny-admin.onrender.com';
