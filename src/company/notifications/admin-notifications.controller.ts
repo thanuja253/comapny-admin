@@ -11,14 +11,13 @@ export class AdminNotificationsController {
    * List admin notifications with unread badge count.
    */
   @Get()
-  @UseGuards(AdminJwtAuthGuard)
   async list(
     @Query('skip') skip?: string,
     @Query('limit') limit?: string,
   ) {
     const result = await this.notificationsService.getForType('A', {
-      skip: skip != null ? parseInt(skip, 10) : 0,
-      limit: limit != null ? parseInt(limit, 10) : 50,
+      skip: skip == null ? 0 : Number.parseInt(skip, 10),
+      limit: limit == null ? 50 : Number.parseInt(limit, 10),
     });
     return {
       status: 'success',
