@@ -40,6 +40,7 @@ async function bootstrap() {
     'http://127.0.0.1:3002',
     'http://127.0.0.1:3015',
     'https://cursor-greenco-mern.vercel.app',
+    'https://greenco-one.vercel.app',
   ];
   const allowedOrigins = envOrigins.length > 0 ? envOrigins : defaultOrigins;
   const localhostOriginOk = (o: string) =>
