@@ -160,11 +160,13 @@ export class CompanyAuthController {
   @Get('registered-companies')
   async getRegisteredCompanies(
     @Query('q') q?: string,
+    @Query('name') name?: string,
     @Query('page') page?: string,
     @Query('limit') limit?: string,
   ) {
+    const search = (q && String(q).trim() !== '' ? q : undefined) ?? (name && String(name).trim() !== '' ? name : undefined);
     return this.companyAuthService.getRegisteredCompanies(
-      q,
+      search,
       page ? Number(page) : 1,
       limit ? Number(limit) : 20,
     );

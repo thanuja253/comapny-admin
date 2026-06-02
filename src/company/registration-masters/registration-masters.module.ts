@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 import { RegistrationMastersController } from './registration-masters.controller';
+import { AdminMastersController } from './admin-masters.controller';
 import { RegistrationMastersService } from './registration-masters.service';
 import { Industry, IndustrySchema } from '../schemas/industry.schema';
 import { Entity, EntitySchema } from '../schemas/entity.schema';
@@ -22,7 +23,7 @@ import { AssessorGrade, AssessorGradeSchema } from '../schemas/assessor-grade.sc
       { name: AssessorGrade.name, schema: AssessorGradeSchema },
     ]),
   ],
-  controllers: [RegistrationMastersController],
+  controllers: [RegistrationMastersController, AdminMastersController],
   providers: [RegistrationMastersService],
   exports: [RegistrationMastersService],
 })
