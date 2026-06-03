@@ -76,8 +76,9 @@ import { CreateCoordinatorDto } from './dto/create-coordinator.dto';
 import { UpdateCoordinatorDto } from './dto/update-coordinator.dto';
 import { basename, join, relative } from 'path';
 import * as fs from 'fs';
-import { GridFSBucket } from 'mongodb';
 import type { Response } from 'express';
+import { GridFSBucket } from 'mongodb';
+import { S3Service } from '../../s3/s3.service';
 import { getCertificationType } from '../../helpers/certification.helper';
 import { passwordGeneration } from '../../helpers/password.helper';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -336,7 +337,16 @@ function buildProposalDocumentViewUrl(
   };
 }
 
-const REGISTRATION_GRIDFS_BUCKET = 'registration_uploads';
+const REGISTRATION_S3_FOLDER = 'uploads/registration';
+const LEGACY_REGISTRATION_GRIDFS_BUCKET = 'registration_uploads';
+
+function legacyRegistrationGridfsIdFromReg(reg: Record<string, any>, key: string): Types.ObjectId | null {
+  const v = reg[key];
+  if (v == null) return null;
+  const s = String(v);
+  if (!Types.ObjectId.isValid(s)) return null;
+  return new Types.ObjectId(s);
+}
 const WORKFLOW_STEP_LABELS: Record<number, string> = {
   1: 'Company Registered',
   2: 'Registration Form',
@@ -358,18 +368,18 @@ const WORKFLOW_STEP_LABELS: Record<number, string> = {
   24: 'Workflow Completed',
 };
 
-function registrationGridfsIdFromReg(reg: Record<string, any>, key: string): Types.ObjectId | null {
+function registrationS3KeyFromReg(reg: Record<string, any>, key: string): string | null {
   const v = reg[key];
   if (v == null) return null;
-  const s = String(v);
-  if (!Types.ObjectId.isValid(s)) return null;
-  return new Types.ObjectId(s);
+  const s = String(v).trim();
+  return s || null;
 }
 
 export type RegistrationFileDownload =
   | { kind: 'buffer'; buffer: Buffer; filename: string; contentType: string }
   | { kind: 'disk'; fullPath: string; filename: string; contentType: string }
-  | { kind: 'gridfs'; fileId: Types.ObjectId; filename: string; contentType: string };
+  | { kind: 's3'; key: string; filename: string; contentType: string }
+  | { kind: 'legacy-gridfs'; fileId: Types.ObjectId; filename: string; contentType: string };
 
 /** Approval status labels and colours for invoice UI (COMPANY_APPROVAL_STATUS / APPROVAL_STATUS_COLORS) */
 export const INVOICE_APPROVAL_STATUS = ['Pending', 'Approved', 'Rejected', 'Under Review'];
@@ -418,6 +428,7 @@ export class CompanyProjectsService {
     @InjectConnection() private readonly mongoConnection: Connection,
     private readonly notificationsService: NotificationsService,
     private readonly mailService: MailService,
+    private readonly s3Service: S3Service,
   ) {}
 
   private calculateTentativeLevel(percentage: number): string {
@@ -459,80 +470,79 @@ export class CompanyProjectsService {
     throw lastError as any;
   }
 
-  private getRegistrationGridfsBucket(): GridFSBucket {
+  private registrationS3Folder(projectId: string): string {
+    return `${REGISTRATION_S3_FOLDER}/${projectId}`;
+  }
+
+  /** Read-only: existing MongoDB rows may still reference GridFS file ids. */
+  private getLegacyRegistrationGridfsBucket(): GridFSBucket {
     const db = this.mongoConnection.db;
     if (!db) {
       throw new BadRequestException({ status: 'error', message: 'Database unavailable' });
     }
-    // Mongoose pins its own mongodb driver; cast avoids duplicate-package Db type clashes.
-    return new GridFSBucket(db as any, { bucketName: REGISTRATION_GRIDFS_BUCKET });
+    return new GridFSBucket(db as any, { bucketName: LEGACY_REGISTRATION_GRIDFS_BUCKET });
   }
 
-  private async registrationGridfsDelete(oid: Types.ObjectId): Promise<void> {
+  private registrationFilePublicUrl(
+    reg: Record<string, any>,
+    s3KeyField: string,
+    urlField: string,
+    apiDownloadUrl: string,
+  ): string {
+    const s3Key = registrationS3KeyFromReg(reg, s3KeyField);
+    if (s3Key) {
+      return this.s3Service.getPublicUrl(s3Key);
+    }
+    const storedUrl = String(reg[urlField] || '').trim();
+    if (storedUrl.startsWith('http') && !storedUrl.includes('/registration-files/')) {
+      return storedUrl;
+    }
+    return apiDownloadUrl;
+  }
+
+  private async deleteRegistrationS3Key(storedKey: string | null | undefined): Promise<void> {
+    const key = storedKey ? this.s3Service.extractKey(storedKey) : null;
+    if (!key) return;
     try {
-      await this.getRegistrationGridfsBucket().delete(oid);
+      await this.s3Service.deleteFile(key);
     } catch {
       /* already removed */
     }
   }
 
-  private async registrationGridfsUpload(
-    buffer: Buffer,
-    filename: string,
-    metadata: Record<string, unknown>,
-  ): Promise<Types.ObjectId> {
-    const bucket = this.getRegistrationGridfsBucket();
-    return new Promise((resolve, reject) => {
-      const uploadStream = bucket.openUploadStream(filename, { metadata });
-      uploadStream.on('error', reject);
-      uploadStream.on('finish', () => {
-        const id = uploadStream.id;
-        resolve(id instanceof Types.ObjectId ? id : new Types.ObjectId(String(id)));
-      });
-      uploadStream.end(buffer);
-    });
-  }
-
-  /** Clone a GridFS file so two projects do not share the same file id (e.g. recertification). */
-  private async registrationGridfsClone(sourceId: Types.ObjectId): Promise<Types.ObjectId | null> {
-    const bucket = this.getRegistrationGridfsBucket();
-    const doc = await bucket.find({ _id: sourceId }).next();
-    if (!doc) return null;
-    const chunks: Buffer[] = [];
-    const stream = bucket.openDownloadStream(sourceId);
-    await new Promise<void>((resolve, reject) => {
-      stream.on('data', (c: Buffer) => chunks.push(c));
-      stream.on('error', reject);
-      stream.on('end', resolve);
-    });
-    const buffer = Buffer.concat(chunks);
-    const meta = (doc.metadata || {}) as Record<string, unknown>;
-    return this.registrationGridfsUpload(buffer, doc.filename, {
-      ...meta,
-      clonedFrom: sourceId.toString(),
-    });
-  }
-
-  private async duplicateRegistrationGridfsInPlace(reg: Record<string, any>): Promise<void> {
-    const briefId = registrationGridfsIdFromReg(reg, 'company_brief_profile_gridfs_id');
-    if (briefId) {
-      const next = await this.registrationGridfsClone(briefId);
-      if (next) reg.company_brief_profile_gridfs_id = next.toString();
+  private async duplicateRegistrationS3InPlace(reg: Record<string, any>, projectId: string): Promise<void> {
+    const folder = this.registrationS3Folder(projectId);
+    const briefKey = registrationS3KeyFromReg(reg, 'company_brief_profile_s3_key');
+    if (briefKey) {
+      const next = await this.s3Service.copyObject(briefKey, folder);
+      if (next) {
+        reg.company_brief_profile_s3_key = next;
+        reg.company_brief_profile_url = this.s3Service.getPublicUrl(next);
+      }
     }
-    const turnId = registrationGridfsIdFromReg(reg, 'turnover_document_gridfs_id');
-    if (turnId) {
-      const next = await this.registrationGridfsClone(turnId);
-      if (next) reg.turnover_document_gridfs_id = next.toString();
+    const turnKey = registrationS3KeyFromReg(reg, 'turnover_document_s3_key');
+    if (turnKey) {
+      const next = await this.s3Service.copyObject(turnKey, folder);
+      if (next) {
+        reg.turnover_document_s3_key = next;
+        reg.turnover_document_url = this.s3Service.getPublicUrl(next);
+      }
     }
-    const sezId = registrationGridfsIdFromReg(reg, 'sez_document_gridfs_id');
-    if (sezId) {
-      const next = await this.registrationGridfsClone(sezId);
-      if (next) reg.sez_document_gridfs_id = next.toString();
+    const sezKey = registrationS3KeyFromReg(reg, 'sez_document_s3_key');
+    if (sezKey) {
+      const next = await this.s3Service.copyObject(sezKey, folder);
+      if (next) {
+        reg.sez_document_s3_key = next;
+        reg.sez_document_url = this.s3Service.getPublicUrl(next);
+      }
     }
+    delete reg.company_brief_profile_gridfs_id;
+    delete reg.turnover_document_gridfs_id;
+    delete reg.sez_document_gridfs_id;
   }
 
   /**
-   * Send registration attachment to the HTTP response (buffer, disk legacy, or GridFS).
+   * Send registration attachment to the HTTP response (S3, embedded buffer, or legacy disk).
    */
   async streamRegistrationFileToResponse(res: Response, download: RegistrationFileDownload): Promise<void> {
     res.setHeader('Content-Type', download.contentType);
@@ -550,8 +560,25 @@ export class CompanyProjectsService {
       return;
     }
 
-    const bucket = this.getRegistrationGridfsBucket();
-    const stream = bucket.openDownloadStream(download.fileId);
+    if (download.kind === 'legacy-gridfs') {
+      const bucket = this.getLegacyRegistrationGridfsBucket();
+      const stream = bucket.openDownloadStream(download.fileId);
+      stream.on('error', () => {
+        if (!res.headersSent) {
+          res.status(404).json({ status: 'error', message: 'File not found' });
+        }
+      });
+      stream.pipe(res);
+      return;
+    }
+
+    const stream = await this.s3Service.getObjectStream(download.key);
+    if (!stream) {
+      if (!res.headersSent) {
+        res.status(404).json({ status: 'error', message: 'File not found' });
+      }
+      return;
+    }
     stream.on('error', () => {
       if (!res.headersSent) {
         res.status(404).json({ status: 'error', message: 'File not found' });
@@ -562,7 +589,7 @@ export class CompanyProjectsService {
 
   /**
    * Old clients / DB rows used URLs like /uploads/registration/:projectId/:filename (disk multer).
-   * Bytes now live in GridFS (or legacy buffer); this path still resolves the same attachment.
+   * Resolves via S3 key, legacy buffer, or disk path.
    */
   async streamLegacyRegistrationUploadPath(
     projectId: string,
@@ -2269,7 +2296,6 @@ export class CompanyProjectsService {
       ...registrationInfo,
       recert_source_project_id: (sourceProject as any)._id.toString(),
     };
-    await this.duplicateRegistrationGridfsInPlace(recertRegistrationInfo);
 
     const newProject = new this.projectModel({
       company_id: companyId,
@@ -2299,6 +2325,9 @@ export class CompanyProjectsService {
       score_band_pdf_path: undefined,
       registration_info: recertRegistrationInfo,
     });
+
+    await this.duplicateRegistrationS3InPlace(recertRegistrationInfo, String(newProject._id));
+    newProject.registration_info = recertRegistrationInfo;
 
     const savedProject = await newProject.save();
 
@@ -3712,8 +3741,7 @@ export class CompanyProjectsService {
     });
     throwIfRegistrationTaxIdConflicts(taxIdConflicts);
 
-    // Handle file uploads
-    const baseUrl = process.env.API_BASE_URL || 'https://comapny-admin.onrender.com';
+    const s3Folder = this.registrationS3Folder(projectId);
     console.log('[Registration Info Service] Processing files:', {
       hasFiles: !!files,
       company_brief_profile: files?.company_brief_profile?.[0]?.originalname,
@@ -3725,43 +3753,41 @@ export class CompanyProjectsService {
       const briefProfileFile = files.company_brief_profile?.[0] || files.brief_profile?.[0];
       const briefBuf = bufferFromMulterFile(briefProfileFile);
       if (briefBuf?.length) {
-        const oldGf = registrationGridfsIdFromReg(prevReg, 'company_brief_profile_gridfs_id');
-        const newId = await this.registrationGridfsUpload(briefBuf, briefProfileFile!.originalname, {
-          projectId,
-          field: 'company_brief_profile',
-          contentType: briefProfileFile!.mimetype,
-        });
-        if (oldGf) await this.registrationGridfsDelete(oldGf);
-        normalizedData.company_brief_profile_gridfs_id = newId.toString();
+        const oldKey =
+          registrationS3KeyFromReg(prevReg, 'company_brief_profile_s3_key') ||
+          this.s3Service.extractKey(prevReg.company_brief_profile_url);
+        const s3Key = await this.s3Service.uploadBuffer(
+          briefBuf,
+          briefProfileFile!.originalname,
+          s3Folder,
+          briefProfileFile!.mimetype,
+        );
+        if (oldKey) await this.deleteRegistrationS3Key(oldKey);
+        normalizedData.company_brief_profile_s3_key = s3Key;
         normalizedData.company_brief_profile_filename = briefProfileFile!.originalname;
-        normalizedData.company_brief_profile_url = `${baseUrl}/api/company/projects/${projectId}/registration-files/company-brief-profile`;
+        normalizedData.company_brief_profile_url = this.s3Service.getPublicUrl(s3Key);
         delete normalizedData.company_brief_profile_file;
-        console.log('[Registration Info Service] Stored company brief profile in GridFS:', {
-          bytes: briefBuf.length,
-          filename: briefProfileFile!.originalname,
-          fileId: newId.toString(),
-        });
+        delete normalizedData.company_brief_profile_gridfs_id;
       }
 
       const turnoverFile = files.turnover_document?.[0] || files.turnover?.[0];
       const turnoverBuf = bufferFromMulterFile(turnoverFile);
       if (turnoverBuf?.length) {
-        const oldGf = registrationGridfsIdFromReg(prevReg, 'turnover_document_gridfs_id');
-        const newId = await this.registrationGridfsUpload(turnoverBuf, turnoverFile!.originalname, {
-          projectId,
-          field: 'turnover_document',
-          contentType: turnoverFile!.mimetype,
-        });
-        if (oldGf) await this.registrationGridfsDelete(oldGf);
-        normalizedData.turnover_document_gridfs_id = newId.toString();
+        const oldKey =
+          registrationS3KeyFromReg(prevReg, 'turnover_document_s3_key') ||
+          this.s3Service.extractKey(prevReg.turnover_document_url);
+        const s3Key = await this.s3Service.uploadBuffer(
+          turnoverBuf,
+          turnoverFile!.originalname,
+          s3Folder,
+          turnoverFile!.mimetype,
+        );
+        if (oldKey) await this.deleteRegistrationS3Key(oldKey);
+        normalizedData.turnover_document_s3_key = s3Key;
         normalizedData.turnover_document_filename = turnoverFile!.originalname;
-        normalizedData.turnover_document_url = `${baseUrl}/api/company/projects/${projectId}/registration-files/turnover-document`;
+        normalizedData.turnover_document_url = this.s3Service.getPublicUrl(s3Key);
         delete normalizedData.turnover_document_file;
-        console.log('[Registration Info Service] Stored turnover document in GridFS:', {
-          bytes: turnoverBuf.length,
-          filename: turnoverFile!.originalname,
-          fileId: newId.toString(),
-        });
+        delete normalizedData.turnover_document_gridfs_id;
       }
 
       const sezFile =
@@ -3771,22 +3797,21 @@ export class CompanyProjectsService {
         files.sezinput?.[0];
       const sezBuf = bufferFromMulterFile(sezFile);
       if (sezBuf?.length) {
-        const oldGf = registrationGridfsIdFromReg(prevReg, 'sez_document_gridfs_id');
-        const newId = await this.registrationGridfsUpload(sezBuf, sezFile!.originalname, {
-          projectId,
-          field: 'sez_document',
-          contentType: sezFile!.mimetype,
-        });
-        if (oldGf) await this.registrationGridfsDelete(oldGf);
-        normalizedData.sez_document_gridfs_id = newId.toString();
+        const oldKey =
+          registrationS3KeyFromReg(prevReg, 'sez_document_s3_key') ||
+          this.s3Service.extractKey(prevReg.sez_document_url);
+        const s3Key = await this.s3Service.uploadBuffer(
+          sezBuf,
+          sezFile!.originalname,
+          s3Folder,
+          sezFile!.mimetype,
+        );
+        if (oldKey) await this.deleteRegistrationS3Key(oldKey);
+        normalizedData.sez_document_s3_key = s3Key;
         normalizedData.sez_document_filename = sezFile!.originalname;
-        normalizedData.sez_document_url = `${baseUrl}/api/company/projects/${projectId}/registration-files/sez-document`;
+        normalizedData.sez_document_url = this.s3Service.getPublicUrl(s3Key);
         delete normalizedData.sez_document_file;
-        console.log('[Registration Info Service] Stored SEZ document in GridFS:', {
-          bytes: sezBuf.length,
-          filename: sezFile!.originalname,
-          fileId: newId.toString(),
-        });
+        delete normalizedData.sez_document_gridfs_id;
       }
     } else {
       console.log('[Registration Info Service] No files received');
@@ -3796,13 +3821,13 @@ export class CompanyProjectsService {
       ...(project.registration_info || {}),
       ...normalizedData,
     };
-    if (normalizedData.company_brief_profile_gridfs_id) {
+    if (normalizedData.company_brief_profile_s3_key) {
       delete mergedReg.company_brief_profile_file;
     }
-    if (normalizedData.turnover_document_gridfs_id) {
+    if (normalizedData.turnover_document_s3_key) {
       delete mergedReg.turnover_document_file;
     }
-    if (normalizedData.sez_document_gridfs_id) {
+    if (normalizedData.sez_document_s3_key) {
       delete mergedReg.sez_document_file;
     }
     project.registration_info = mergedReg;
@@ -3813,11 +3838,11 @@ export class CompanyProjectsService {
     console.log('[Registration Info Service] Saving to database:', {
       projectId: projectId.toString(),
       hasCompanyBriefProfile:
-        !!normalizedData.company_brief_profile_url || !!normalizedData.company_brief_profile_gridfs_id,
+        !!normalizedData.company_brief_profile_url || !!normalizedData.company_brief_profile_s3_key,
       hasTurnoverDocument:
-        !!normalizedData.turnover_document_url || !!normalizedData.turnover_document_gridfs_id,
+        !!normalizedData.turnover_document_url || !!normalizedData.turnover_document_s3_key,
       hasSezDocument:
-        !!normalizedData.sez_document_url || !!normalizedData.sez_document_gridfs_id,
+        !!normalizedData.sez_document_url || !!normalizedData.sez_document_s3_key,
       registrationInfoKeys: Object.keys(project.registration_info),
       profile_update: project.profile_update,
     });
@@ -3909,25 +3934,28 @@ export class CompanyProjectsService {
     const fileData: any = {};
     
     if (normalizedData.company_brief_profile_url) {
+      const downloadUrl = normalizedData.company_brief_profile_url;
       fileData.company_brief_profile = {
-        url: normalizedData.company_brief_profile_url,
+        url: downloadUrl,
         filename: normalizedData.company_brief_profile_filename,
-        downloadUrl: `${baseUrl}/api/company/projects/${projectId}/registration-files/company-brief-profile`,
+        downloadUrl,
       };
     }
 
     if (normalizedData.turnover_document_url) {
+      const downloadUrl = normalizedData.turnover_document_url;
       fileData.turnover_document = {
-        url: normalizedData.turnover_document_url,
+        url: downloadUrl,
         filename: normalizedData.turnover_document_filename,
-        downloadUrl: `${baseUrl}/api/company/projects/${projectId}/registration-files/turnover-document`,
+        downloadUrl,
       };
     }
     if (normalizedData.sez_document_url) {
+      const downloadUrl = normalizedData.sez_document_url;
       fileData.sez_document = {
-        url: normalizedData.sez_document_url,
+        url: downloadUrl,
         filename: normalizedData.sez_document_filename,
-        downloadUrl: `${baseUrl}/api/company/projects/${projectId}/registration-files/sez-document`,
+        downloadUrl,
       };
     }
 
@@ -4056,13 +4084,19 @@ export class CompanyProjectsService {
     }
 
     const briefBuf = bufferFromRegistrationStored(registrationInfo.company_brief_profile_file?.data);
-    const briefGrid = registrationGridfsIdFromReg(registrationInfo, 'company_brief_profile_gridfs_id');
     const hasBrief =
       (!!briefBuf && briefBuf.length > 0) ||
       !!registrationInfo.company_brief_profile_url ||
-      !!briefGrid;
+      !!registrationInfo.company_brief_profile_s3_key ||
+      !!registrationInfo.company_brief_profile_gridfs_id;
     if (hasBrief) {
-      const downloadUrl = `${baseUrl}/api/company/projects/${projectId}/registration-files/company-brief-profile`;
+      const apiDownloadUrl = `${baseUrl}/api/company/projects/${projectId}/registration-files/company-brief-profile`;
+      const downloadUrl = this.registrationFilePublicUrl(
+        registrationInfo,
+        'company_brief_profile_s3_key',
+        'company_brief_profile_url',
+        apiDownloadUrl,
+      );
       responseData.company_brief_profile = {
         url: downloadUrl,
         filename: registrationInfo.company_brief_profile_filename || 'company_brief_profile',
@@ -4073,13 +4107,19 @@ export class CompanyProjectsService {
     }
 
     const turnoverBuf = bufferFromRegistrationStored(registrationInfo.turnover_document_file?.data);
-    const turnoverGrid = registrationGridfsIdFromReg(registrationInfo, 'turnover_document_gridfs_id');
     const hasTurnover =
       (!!turnoverBuf && turnoverBuf.length > 0) ||
       !!registrationInfo.turnover_document_url ||
-      !!turnoverGrid;
+      !!registrationInfo.turnover_document_s3_key ||
+      !!registrationInfo.turnover_document_gridfs_id;
     if (hasTurnover) {
-      const downloadUrl = `${baseUrl}/api/company/projects/${projectId}/registration-files/turnover-document`;
+      const apiDownloadUrl = `${baseUrl}/api/company/projects/${projectId}/registration-files/turnover-document`;
+      const downloadUrl = this.registrationFilePublicUrl(
+        registrationInfo,
+        'turnover_document_s3_key',
+        'turnover_document_url',
+        apiDownloadUrl,
+      );
       responseData.turnover_document = {
         url: downloadUrl,
         filename: registrationInfo.turnover_document_filename || 'turnover_document',
@@ -4090,13 +4130,19 @@ export class CompanyProjectsService {
     }
 
     const sezBuf = bufferFromRegistrationStored(registrationInfo.sez_document_file?.data);
-    const sezGrid = registrationGridfsIdFromReg(registrationInfo, 'sez_document_gridfs_id');
     const hasSez =
       (!!sezBuf && sezBuf.length > 0) ||
       !!registrationInfo.sez_document_url ||
-      !!sezGrid;
+      !!registrationInfo.sez_document_s3_key ||
+      !!registrationInfo.sez_document_gridfs_id;
     if (hasSez) {
-      const downloadUrl = `${baseUrl}/api/company/projects/${projectId}/registration-files/sez-document`;
+      const apiDownloadUrl = `${baseUrl}/api/company/projects/${projectId}/registration-files/sez-document`;
+      const downloadUrl = this.registrationFilePublicUrl(
+        registrationInfo,
+        'sez_document_s3_key',
+        'sez_document_url',
+        apiDownloadUrl,
+      );
       responseData.sez_document = {
         url: downloadUrl,
         filename: registrationInfo.sez_document_filename || 'sez_document',
@@ -4112,6 +4158,9 @@ export class CompanyProjectsService {
     delete responseData.turnover_document_filename;
     delete responseData.sez_document_url;
     delete responseData.sez_document_filename;
+    delete responseData.company_brief_profile_s3_key;
+    delete responseData.turnover_document_s3_key;
+    delete responseData.sez_document_s3_key;
     delete responseData.company_brief_profile_gridfs_id;
     delete responseData.turnover_document_gridfs_id;
     delete responseData.sez_document_gridfs_id;
@@ -4237,13 +4286,19 @@ export class CompanyProjectsService {
     }
 
     const briefBuf = bufferFromRegistrationStored(registrationInfo.company_brief_profile_file?.data);
-    const briefGrid = registrationGridfsIdFromReg(registrationInfo, 'company_brief_profile_gridfs_id');
     const hasBrief =
       (!!briefBuf && briefBuf.length > 0) ||
       !!registrationInfo.company_brief_profile_url ||
-      !!briefGrid;
+      !!registrationInfo.company_brief_profile_s3_key ||
+      !!registrationInfo.company_brief_profile_gridfs_id;
     if (hasBrief) {
-      const downloadUrl = `${baseUrl}/api/admin/projects/${effectiveProjectId}/registration-files/company-brief-profile`;
+      const apiDownloadUrl = `${baseUrl}/api/admin/projects/${effectiveProjectId}/registration-files/company-brief-profile`;
+      const downloadUrl = this.registrationFilePublicUrl(
+        registrationInfo,
+        'company_brief_profile_s3_key',
+        'company_brief_profile_url',
+        apiDownloadUrl,
+      );
       responseData.company_brief_profile = {
         url: downloadUrl,
         filename: registrationInfo.company_brief_profile_filename || 'company_brief_profile',
@@ -4254,13 +4309,19 @@ export class CompanyProjectsService {
     }
 
     const turnoverBuf = bufferFromRegistrationStored(registrationInfo.turnover_document_file?.data);
-    const turnoverGrid = registrationGridfsIdFromReg(registrationInfo, 'turnover_document_gridfs_id');
     const hasTurnover =
       (!!turnoverBuf && turnoverBuf.length > 0) ||
       !!registrationInfo.turnover_document_url ||
-      !!turnoverGrid;
+      !!registrationInfo.turnover_document_s3_key ||
+      !!registrationInfo.turnover_document_gridfs_id;
     if (hasTurnover) {
-      const downloadUrl = `${baseUrl}/api/admin/projects/${effectiveProjectId}/registration-files/turnover-document`;
+      const apiDownloadUrl = `${baseUrl}/api/admin/projects/${effectiveProjectId}/registration-files/turnover-document`;
+      const downloadUrl = this.registrationFilePublicUrl(
+        registrationInfo,
+        'turnover_document_s3_key',
+        'turnover_document_url',
+        apiDownloadUrl,
+      );
       responseData.turnover_document = {
         url: downloadUrl,
         filename: registrationInfo.turnover_document_filename || 'turnover_document',
@@ -4271,13 +4332,19 @@ export class CompanyProjectsService {
     }
 
     const sezBuf = bufferFromRegistrationStored(registrationInfo.sez_document_file?.data);
-    const sezGrid = registrationGridfsIdFromReg(registrationInfo, 'sez_document_gridfs_id');
     const hasSez =
       (!!sezBuf && sezBuf.length > 0) ||
       !!registrationInfo.sez_document_url ||
-      !!sezGrid;
+      !!registrationInfo.sez_document_s3_key ||
+      !!registrationInfo.sez_document_gridfs_id;
     if (hasSez) {
-      const downloadUrl = `${baseUrl}/api/admin/projects/${effectiveProjectId}/registration-files/sez-document`;
+      const apiDownloadUrl = `${baseUrl}/api/admin/projects/${effectiveProjectId}/registration-files/sez-document`;
+      const downloadUrl = this.registrationFilePublicUrl(
+        registrationInfo,
+        'sez_document_s3_key',
+        'sez_document_url',
+        apiDownloadUrl,
+      );
       responseData.sez_document = {
         url: downloadUrl,
         filename: registrationInfo.sez_document_filename || 'sez_document',
@@ -4293,6 +4360,9 @@ export class CompanyProjectsService {
     delete responseData.turnover_document_filename;
     delete responseData.sez_document_url;
     delete responseData.sez_document_filename;
+    delete responseData.company_brief_profile_s3_key;
+    delete responseData.turnover_document_s3_key;
+    delete responseData.sez_document_s3_key;
     delete responseData.company_brief_profile_gridfs_id;
     delete responseData.turnover_document_gridfs_id;
     delete responseData.sez_document_gridfs_id;
@@ -4305,7 +4375,7 @@ export class CompanyProjectsService {
   }
 
   /**
-   * Resolve registration attachment for download: GridFS first, then embedded buffer, then legacy disk under /uploads/.
+   * Resolve registration attachment for download: S3, legacy GridFS, embedded buffer, or disk path.
    */
   async resolveRegistrationFileDownload(
     registrationInfo: Record<string, any> | undefined,
@@ -4315,16 +4385,29 @@ export class CompanyProjectsService {
     const ft = String(fileType || '').toLowerCase();
 
     if (ft === 'company-brief-profile' || ft === 'brief-profile') {
-      const gfId = registrationGridfsIdFromReg(reg, 'company_brief_profile_gridfs_id');
+      const s3Key =
+        registrationS3KeyFromReg(reg, 'company_brief_profile_s3_key') ||
+        this.s3Service.extractKey(reg.company_brief_profile_url);
+      if (s3Key) {
+        const filename =
+          reg.company_brief_profile_filename || reg.company_brief_profile_file?.originalName || 'company_brief_profile';
+        return {
+          kind: 's3',
+          key: s3Key,
+          filename: String(filename),
+          contentType: contentTypeForRegistrationFilename(String(filename), 'application/octet-stream'),
+        };
+      }
+      const gfId = legacyRegistrationGridfsIdFromReg(reg, 'company_brief_profile_gridfs_id');
       if (gfId) {
         const filename =
           reg.company_brief_profile_filename || reg.company_brief_profile_file?.originalName || 'company_brief_profile';
-        const doc = await this.getRegistrationGridfsBucket().find({ _id: gfId }).next();
+        const doc = await this.getLegacyRegistrationGridfsBucket().find({ _id: gfId }).next();
         const meta = (doc?.metadata || {}) as Record<string, unknown>;
         const contentType =
           (typeof meta.contentType === 'string' && meta.contentType) ||
           contentTypeForRegistrationFilename(String(filename), 'application/octet-stream');
-        return { kind: 'gridfs', fileId: gfId, filename: String(filename), contentType };
+        return { kind: 'legacy-gridfs', fileId: gfId, filename: String(filename), contentType };
       }
       const embedded = reg.company_brief_profile_file;
       const buf = bufferFromRegistrationStored(embedded?.data);
@@ -4356,16 +4439,29 @@ export class CompanyProjectsService {
     }
 
     if (ft === 'turnover-document' || ft === 'turnover') {
-      const gfId = registrationGridfsIdFromReg(reg, 'turnover_document_gridfs_id');
+      const s3Key =
+        registrationS3KeyFromReg(reg, 'turnover_document_s3_key') ||
+        this.s3Service.extractKey(reg.turnover_document_url);
+      if (s3Key) {
+        const filename =
+          reg.turnover_document_filename || reg.turnover_document_file?.originalName || 'turnover_document';
+        return {
+          kind: 's3',
+          key: s3Key,
+          filename: String(filename),
+          contentType: contentTypeForRegistrationFilename(String(filename), 'application/octet-stream'),
+        };
+      }
+      const gfId = legacyRegistrationGridfsIdFromReg(reg, 'turnover_document_gridfs_id');
       if (gfId) {
         const filename =
           reg.turnover_document_filename || reg.turnover_document_file?.originalName || 'turnover_document';
-        const doc = await this.getRegistrationGridfsBucket().find({ _id: gfId }).next();
+        const doc = await this.getLegacyRegistrationGridfsBucket().find({ _id: gfId }).next();
         const meta = (doc?.metadata || {}) as Record<string, unknown>;
         const contentType =
           (typeof meta.contentType === 'string' && meta.contentType) ||
           contentTypeForRegistrationFilename(String(filename), 'application/octet-stream');
-        return { kind: 'gridfs', fileId: gfId, filename: String(filename), contentType };
+        return { kind: 'legacy-gridfs', fileId: gfId, filename: String(filename), contentType };
       }
       const embedded = reg.turnover_document_file;
       const buf = bufferFromRegistrationStored(embedded?.data);
@@ -4396,16 +4492,29 @@ export class CompanyProjectsService {
     }
 
     if (ft === 'sez-document' || ft === 'sez') {
-      const gfId = registrationGridfsIdFromReg(reg, 'sez_document_gridfs_id');
+      const s3Key =
+        registrationS3KeyFromReg(reg, 'sez_document_s3_key') ||
+        this.s3Service.extractKey(reg.sez_document_url);
+      if (s3Key) {
+        const filename =
+          reg.sez_document_filename || reg.sez_document_file?.originalName || 'sez_document';
+        return {
+          kind: 's3',
+          key: s3Key,
+          filename: String(filename),
+          contentType: contentTypeForRegistrationFilename(String(filename), 'application/pdf'),
+        };
+      }
+      const gfId = legacyRegistrationGridfsIdFromReg(reg, 'sez_document_gridfs_id');
       if (gfId) {
         const filename =
           reg.sez_document_filename || reg.sez_document_file?.originalName || 'sez_document';
-        const doc = await this.getRegistrationGridfsBucket().find({ _id: gfId }).next();
+        const doc = await this.getLegacyRegistrationGridfsBucket().find({ _id: gfId }).next();
         const meta = (doc?.metadata || {}) as Record<string, unknown>;
         const contentType =
           (typeof meta.contentType === 'string' && meta.contentType) ||
           contentTypeForRegistrationFilename(String(filename), 'application/pdf');
-        return { kind: 'gridfs', fileId: gfId, filename: String(filename), contentType };
+        return { kind: 'legacy-gridfs', fileId: gfId, filename: String(filename), contentType };
       }
       const embedded = reg.sez_document_file;
       const buf = bufferFromRegistrationStored(embedded?.data);

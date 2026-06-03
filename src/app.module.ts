@@ -13,6 +13,7 @@ import { AdminAuthModule } from './admin/admin-auth/admin-auth.module';
 import { AssessorAuthModule } from './assessor/assessor-auth/assessor-auth.module';
 import { AssessorManagementModule } from './admin/assessor-management/assessor-management.module';
 import { AppController } from './app.controller';
+import { S3Module } from './s3/s3.module';
 
 @Module({
   imports: [
@@ -30,6 +31,7 @@ import { AppController } from './app.controller';
       }),
       inject: [ConfigService],
     }),
+    S3Module,
     ScheduleModule.forRoot(),
     CompanyAuthModule,
     CompanyProjectsModule,

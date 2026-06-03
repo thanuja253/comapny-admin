@@ -14,8 +14,7 @@ export const REGISTRATION_INFO_FILE_FIELDS = [
 ];
 
 /**
- * Registration files are uploaded into memory then written to MongoDB GridFS (bucket `registration_uploads`).
- * GridFS avoids the 16MB document limit and survives Render redeploys (no reliance on local disk).
+ * Registration files are buffered in memory then uploaded to S3 via S3Service.
  */
 export const registrationInfoMulterOptions = {
   storage: memoryStorage(),

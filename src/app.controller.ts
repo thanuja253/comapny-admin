@@ -37,7 +37,7 @@ export class AppController {
   }
 
   /**
-   * Legacy public URL pattern from disk-based multer; now streams from GridFS / embedded data.
+   * Legacy public URL pattern from disk-based multer; now streams from S3 / embedded data.
    */
   @Get('uploads/registration/:projectId/:filename')
   async legacyRegistrationUpload(

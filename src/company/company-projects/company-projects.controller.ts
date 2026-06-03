@@ -1274,6 +1274,18 @@ export class CompanyProjectsController {
   }
 
   /**
+   * Primary Data: review view — same payload as `.../primary-data/approval`.
+   * Admin UIs often use the company API base (`/api/company/projects/.../primary-data/review`).
+   * GET /api/company/projects/:projectId/primary-data/review
+   */
+  @Get(':projectId/primary-data/review')
+  async getPrimaryDataReviewCompanyApiAlias(
+    @Param('projectId') projectId: string,
+  ): Promise<any> {
+    return this.companyProjectsService.getPrimaryDataForApproval(projectId);
+  }
+
+  /**
    * Primary Data: Admin approval view (submitted data grouped by info_type).
    * GET /api/company/projects/:projectId/primary-data/approval
    */
