@@ -19,6 +19,8 @@ import {
   FACILITATOR_REVIEW_REQUIRED_DOCUMENT_KEYS,
   isFacilitatorProfileDocumentKey,
 } from '../facilitator-auth/facilitator-profile-document-keys';
+import { S3Service } from '../../s3/s3.service';
+import { persistMulterFile } from '../../common/stored-file.util';
 
 @Injectable()
 export class FacilitatorsService {
@@ -26,7 +28,16 @@ export class FacilitatorsService {
     @InjectModel(Facilitator.name)
     private readonly facilitatorModel: Model<FacilitatorDocument>,
     private readonly mailService: MailService,
+    private readonly s3Service: S3Service,
   ) {}
+
+  private async uploadFacilitatorFile(f?: Express.Multer.File[]): Promise<string> {
+    return f?.[0] ? (await persistMulterFile(this.s3Service, f[0], 'uploads/facilitators')).publicUrl : '';
+  }
+
+  private async uploadFacilitatorFileOptional(f?: Express.Multer.File[]): Promise<string | undefined> {
+    return f?.[0] ? (await persistMulterFile(this.s3Service, f[0], 'uploads/facilitators')).publicUrl : undefined;
+  }
 
   private toBool(value: unknown): boolean {
     if (typeof value === 'boolean') return value;
@@ -459,8 +470,9 @@ export class FacilitatorsService {
     if (existing) {
       throw new BadRequestException({ status: 'validations', errors: { email: ['Facilitator with this email already exists.'] } });
     }
-    const filePath = (f?: Express.Multer.File[]) => (f?.[0] ? `uploads/facilitators/${f[0].filename}` : '');
-    const briefProfileIndividualPath = filePath(files?.brief_profile_individual) || filePath(files?.biodata);
+    const briefProfileIndividualPath =
+      (await this.uploadFacilitatorFile(files?.brief_profile_individual)) ||
+      (await this.uploadFacilitatorFile(files?.biodata));
     const bankInfo = await this.deriveBankDetails(dto.ifsc_code, dto.bank_name, dto.branch_name);
     const orgIndustry = String(
       dto.organization ||
@@ -508,47 +520,47 @@ export class FacilitatorsService {
       linkedin_profile: dto.linkedin_profile || '',
       biodata: briefProfileIndividualPath,
       brief_profile_individual: briefProfileIndividualPath,
-      brief_profile_organization: filePath(files?.brief_profile_organization),
-      projects_handled: filePath(files?.projects_handled),
-      vendor_registration_form: filePath(files?.vendor_registration_form),
-      non_disclosure_agreement: filePath(files?.non_disclosure_agreement),
-      health_declaration: filePath(files?.health_declaration),
-      gst_declaration: filePath(files?.gst_declaration),
-      pan_card: filePath(files?.pan_card),
-      cancelled_cheque: filePath(files?.cancelled_cheque),
-      profile_image: filePath(files?.profile_image),
+      brief_profile_organization: await this.uploadFacilitatorFile(files?.brief_profile_organization),
+      projects_handled: await this.uploadFacilitatorFile(files?.projects_handled),
+      vendor_registration_form: await this.uploadFacilitatorFile(files?.vendor_registration_form),
+      non_disclosure_agreement: await this.uploadFacilitatorFile(files?.non_disclosure_agreement),
+      health_declaration: await this.uploadFacilitatorFile(files?.health_declaration),
+      gst_declaration: await this.uploadFacilitatorFile(files?.gst_declaration),
+      pan_card: await this.uploadFacilitatorFile(files?.pan_card),
+      cancelled_cheque: await this.uploadFacilitatorFile(files?.cancelled_cheque),
+      profile_image: await this.uploadFacilitatorFile(files?.profile_image),
       status: (dto.status || '1').toString(),
       approval_status: 'Pending',
       approval_remarks: '',
       profile_status: 'Incomplete',
       document_approvals: {
-        ...(filePath(files?.profile_image) ? { profile_image: { status: 'Approved', remarks: '' } } : {}),
+        ...(files?.profile_image?.[0] ? { profile_image: { status: 'Approved', remarks: '' } } : {}),
         ...(briefProfileIndividualPath
           ? {
               biodata: { status: 'Approved', remarks: '' },
               brief_profile_individual: { status: 'Approved', remarks: '' },
             }
           : {}),
-        ...(filePath(files?.brief_profile_organization)
+        ...(files?.brief_profile_organization?.[0]
           ? { brief_profile_organization: { status: 'Approved', remarks: '' } }
           : {}),
-        ...(filePath(files?.projects_handled)
+        ...(files?.projects_handled?.[0]
           ? { projects_handled: { status: 'Approved', remarks: '' } }
           : {}),
-        ...(filePath(files?.vendor_registration_form)
+        ...(files?.vendor_registration_form?.[0]
           ? { vendor_registration_form: { status: 'Approved', remarks: '' } }
           : {}),
-        ...(filePath(files?.non_disclosure_agreement)
+        ...(files?.non_disclosure_agreement?.[0]
           ? { non_disclosure_agreement: { status: 'Approved', remarks: '' } }
           : {}),
-        ...(filePath(files?.health_declaration)
+        ...(files?.health_declaration?.[0]
           ? { health_declaration: { status: 'Approved', remarks: '' } }
           : {}),
-        ...(filePath(files?.gst_declaration)
+        ...(files?.gst_declaration?.[0]
           ? { gst_declaration: { status: 'Approved', remarks: '' } }
           : {}),
-        ...(filePath(files?.pan_card) ? { pan_card: { status: 'Approved', remarks: '' } } : {}),
-        ...(filePath(files?.cancelled_cheque)
+        ...(files?.pan_card?.[0] ? { pan_card: { status: 'Approved', remarks: '' } } : {}),
+        ...(files?.cancelled_cheque?.[0]
           ? { cancelled_cheque: { status: 'Approved', remarks: '' } }
           : {}),
       },
@@ -580,7 +592,6 @@ export class FacilitatorsService {
     const row = await this.facilitatorModel.findById(facilitatorId);
     if (!row) throw new NotFoundException({ status: 'error', message: 'Facilitator not found' });
 
-    const filePath = (f?: Express.Multer.File[]) => (f?.[0] ? `uploads/facilitators/${f[0].filename}` : undefined);
     const bankInfo = await this.deriveBankDetails(
       dto.ifsc_code ?? row.ifsc_code,
       dto.bank_name ?? row.bank_name,
@@ -636,19 +647,32 @@ export class FacilitatorsService {
     row.status = (dto.status || row.status || '1').toString();
     row.approval_status = 'Pending';
     row.approval_remarks = '';
-    row.profile_image = filePath(files?.profile_image) ?? row.profile_image;
-    const briefProfileIndividualPath = filePath(files?.brief_profile_individual) ?? filePath(files?.biodata);
+    row.profile_image =
+      (await this.uploadFacilitatorFileOptional(files?.profile_image)) ?? row.profile_image;
+    const briefProfileIndividualPath =
+      (await this.uploadFacilitatorFileOptional(files?.brief_profile_individual)) ??
+      (await this.uploadFacilitatorFileOptional(files?.biodata));
     row.biodata = briefProfileIndividualPath ?? row.biodata;
-    (row as any).brief_profile_individual = briefProfileIndividualPath ?? (row as any).brief_profile_individual;
+    (row as any).brief_profile_individual =
+      briefProfileIndividualPath ?? (row as any).brief_profile_individual;
     (row as any).brief_profile_organization =
-      filePath(files?.brief_profile_organization) ?? (row as any).brief_profile_organization;
-    (row as any).projects_handled = filePath(files?.projects_handled) ?? (row as any).projects_handled;
-    row.vendor_registration_form = filePath(files?.vendor_registration_form) ?? row.vendor_registration_form;
-    row.non_disclosure_agreement = filePath(files?.non_disclosure_agreement) ?? row.non_disclosure_agreement;
-    row.health_declaration = filePath(files?.health_declaration) ?? row.health_declaration;
-    row.gst_declaration = filePath(files?.gst_declaration) ?? row.gst_declaration;
-    row.pan_card = filePath(files?.pan_card) ?? row.pan_card;
-    row.cancelled_cheque = filePath(files?.cancelled_cheque) ?? row.cancelled_cheque;
+      (await this.uploadFacilitatorFileOptional(files?.brief_profile_organization)) ??
+      (row as any).brief_profile_organization;
+    (row as any).projects_handled =
+      (await this.uploadFacilitatorFileOptional(files?.projects_handled)) ?? (row as any).projects_handled;
+    row.vendor_registration_form =
+      (await this.uploadFacilitatorFileOptional(files?.vendor_registration_form)) ??
+      row.vendor_registration_form;
+    row.non_disclosure_agreement =
+      (await this.uploadFacilitatorFileOptional(files?.non_disclosure_agreement)) ??
+      row.non_disclosure_agreement;
+    row.health_declaration =
+      (await this.uploadFacilitatorFileOptional(files?.health_declaration)) ?? row.health_declaration;
+    row.gst_declaration =
+      (await this.uploadFacilitatorFileOptional(files?.gst_declaration)) ?? row.gst_declaration;
+    row.pan_card = (await this.uploadFacilitatorFileOptional(files?.pan_card)) ?? row.pan_card;
+    row.cancelled_cheque =
+      (await this.uploadFacilitatorFileOptional(files?.cancelled_cheque)) ?? row.cancelled_cheque;
     const prev = ((row as any).document_approvals || {}) as Record<
       string,
       { status?: string; remarks?: string }

@@ -18,7 +18,7 @@ import { CompanyProjectsService } from './company-projects.service';
 import { AssessorJwtAuthGuard } from '../assessor-auth/guards/assessor-jwt-auth.guard';
 import { AssessorAccountStatusGuard } from '../assessor-auth/guards/assessor-account-status.guard';
 import { Response } from 'express';
-import { diskStorage } from 'multer';
+import { multerMemoryOptions } from '../../common/multer-memory.config';
 import { extname, join } from 'path';
 import * as fs from 'fs';
 
@@ -243,18 +243,7 @@ export class AssessorCompanyProjectsController {
       { name: 'invoice_file', maxCount: 1 },
       { name: 'document', maxCount: 1 },
     ], {
-      storage: diskStorage({
-        destination: (req, _file, cb) => {
-          const projectId = req.params.projectId;
-          const uploadPath = join(process.cwd(), 'uploads', 'company', projectId, 'expenses');
-          if (!fs.existsSync(uploadPath)) fs.mkdirSync(uploadPath, { recursive: true });
-          cb(null, uploadPath);
-        },
-        filename: (_req, file, cb) => {
-          const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
-          cb(null, `expense-${uniqueSuffix}${extname(file.originalname)}`);
-        },
-      }),
+      ...multerMemoryOptions,
       limits: { fileSize: 10 * 1024 * 1024 },
       fileFilter: (_req, file, cb) => {
         const isPdf =
@@ -309,18 +298,7 @@ export class AssessorCompanyProjectsController {
       { name: 'invoice_file', maxCount: 1 },
       { name: 'document', maxCount: 1 },
     ], {
-      storage: diskStorage({
-        destination: (req, _file, cb) => {
-          const projectId = req.params.projectId;
-          const uploadPath = join(process.cwd(), 'uploads', 'company', projectId, 'expenses');
-          if (!fs.existsSync(uploadPath)) fs.mkdirSync(uploadPath, { recursive: true });
-          cb(null, uploadPath);
-        },
-        filename: (_req, file, cb) => {
-          const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
-          cb(null, `expense-${uniqueSuffix}${extname(file.originalname)}`);
-        },
-      }),
+      ...multerMemoryOptions,
       limits: { fileSize: 10 * 1024 * 1024 },
       fileFilter: (_req, file, cb) => {
         const isPdf =

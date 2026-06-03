@@ -5,8 +5,10 @@ import {
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
-import { basename, join } from 'path';
-import * as fs from 'fs';
+import { basename } from 'path';
+import { S3Service } from '../../s3/s3.service';
+import { persistMulterFile, resolvePublicUrl, streamStoredFileToResponse } from '../../common/stored-file.util';
+import type { Response } from 'express';
 import {
   AssessmentChecklistDocument,
   AssessmentChecklistDocumentDocument,
@@ -36,12 +38,11 @@ export class AssessmentChecklistDocumentsService {
     private readonly groupModel: Model<GroupManagementDocument>,
     @InjectModel(ParameterManagement.name)
     private readonly criteriaModel: Model<ParameterManagementDocument>,
+    private readonly s3Service: S3Service,
   ) {}
 
   private toUrl(path: string): string {
-    const base = (process.env.API_BASE_URL || 'https://comapny-admin.onrender.com').replace(/\/+$/, '');
-    const normalized = path.startsWith('/') ? path : `/${path}`;
-    return `${base}${normalized}`;
+    return resolvePublicUrl(this.s3Service, path) || path;
   }
 
   async listForProject(projectId: string, criteriaId?: string, latestPerCriteria = false) {
@@ -87,10 +88,16 @@ export class AssessmentChecklistDocumentsService {
     sectorId: string;
     criteriaId: string;
     title: string;
-    documentPath: string;
+    file: Express.Multer.File;
     uploadedByRole: 'COMPANY' | 'ADMIN';
     uploadedById?: string;
   }) {
+    const { publicUrl } = await persistMulterFile(
+      this.s3Service,
+      args.file,
+      `uploads/companyproject/assessmentChecklist/${args.projectId}`,
+    );
+    const documentPath = publicUrl;
     const sector = await this.sectorModel.findById(args.sectorId).lean();
     if (!sector) throw new NotFoundException({ status: 'error', message: 'Sector not found' });
     const groupId = String((sector as any).group_id || '').trim();
@@ -107,8 +114,8 @@ export class AssessmentChecklistDocumentsService {
     if (!title) {
       throw new BadRequestException({ status: 'validations', errors: { title: ['title is required.'] } });
     }
-    if (!args.documentPath?.trim()) {
-      throw new BadRequestException({ status: 'error', message: 'document_path is required' });
+    if (!documentPath?.trim()) {
+      throw new BadRequestException({ status: 'error', message: 'document is required' });
     }
 
     // If there is an active rejected doc with same title+criteria, deactivate it (reupload loop)
@@ -136,7 +143,7 @@ export class AssessmentChecklistDocumentsService {
       criteria_name: (criteria as any).name || '',
       criteria_short_name: (criteria as any).short_name || '',
       title,
-      document_path: String(args.documentPath).replace(/^\/+/, ''),
+      document_path: documentPath,
       status,
       remarks: '',
       is_active: true,
@@ -215,20 +222,22 @@ export class AssessmentChecklistDocumentsService {
     }
 
     const group = await this.groupModel.findById(groupId).select('sample_document').lean();
-    const relativePath = String((group as any)?.sample_document || '').trim().replace(/^\/+/, '');
-    if (!relativePath) {
+    const stored = String((group as any)?.sample_document || '').trim();
+    if (!stored) {
       throw new NotFoundException({ status: 'error', message: 'Sample checklist document not found' });
     }
 
-    const absolutePath = join(process.cwd(), relativePath);
-    if (!fs.existsSync(absolutePath)) {
-      throw new NotFoundException({ status: 'error', message: 'Sample checklist file missing on server' });
-    }
+    const filename = stored.split('/').pop() || 'sample-checklist';
+    return { stored, filename };
+  }
 
-    return {
-      absolutePath,
-      filename: basename(absolutePath),
-    };
+  async streamSampleChecklistDocument(
+    projectId: string,
+    sectorId: string | undefined,
+    res: Response,
+  ): Promise<void> {
+    const file = await this.getSampleChecklistDocumentForProject(projectId, sectorId);
+    await streamStoredFileToResponse(this.s3Service, res, file.stored, file.filename, 'application/pdf');
   }
 }
 

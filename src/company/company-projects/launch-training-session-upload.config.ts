@@ -1,8 +1,6 @@
 import { BadRequestException } from '@nestjs/common';
 import { FileFieldsInterceptor } from '@nestjs/platform-express';
-import { diskStorage } from 'multer';
-import { extname, join } from 'path';
-import * as fs from 'fs';
+import { multerMemoryOptions } from '../../common/multer-memory.config';
 import type { CompanyProjectsService } from './company-projects.service';
 import type { UploadLaunchAndTrainingDto } from './dto/upload-launch-and-training.dto';
 
@@ -27,26 +25,7 @@ export function launchTrainingSessionUploadInterceptor() {
       { name: 'launch_upload', maxCount: 1 },
     ],
     {
-      storage: diskStorage({
-        destination: (req, file, cb) => {
-          const pid = (req as { params?: { projectId?: string } }).params?.projectId;
-          const uploadPath = join(
-            process.cwd(),
-            'uploads',
-            'companyproject',
-            'launchAndTraining',
-            pid || '_',
-          );
-          if (!fs.existsSync(uploadPath)) {
-            fs.mkdirSync(uploadPath, { recursive: true });
-          }
-          cb(null, uploadPath);
-        },
-        filename: (req, file, cb) => {
-          const unique = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
-          cb(null, `launch-session-${unique}${extname(file.originalname)}`);
-        },
-      }),
+      ...multerMemoryOptions,
       limits: { fileSize: 10 * 1024 * 1024 },
       fileFilter: (req, file, cb) => {
         const ok = [

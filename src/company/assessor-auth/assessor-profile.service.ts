@@ -7,13 +7,22 @@ import {
   ASSESSOR_PROFILE_DOCUMENT_KEYS,
   ASSESSOR_REVIEW_REQUIRED_DOCUMENT_KEYS,
 } from './assessor-profile-document-keys';
+import { S3Service } from '../../s3/s3.service';
+import { persistMulterFile } from '../../common/stored-file.util';
 
 @Injectable()
 export class AssessorProfileService {
   constructor(
     @InjectModel(Assessor.name)
     private readonly assessorModel: Model<AssessorDocument>,
+    private readonly s3Service: S3Service,
   ) {}
+
+  private async uploadField(f?: Express.Multer.File[]): Promise<string | undefined> {
+    return f?.[0]
+      ? (await persistMulterFile(this.s3Service, f[0], 'uploads/assessors')).publicUrl
+      : undefined;
+  }
 
   private toBool(value: unknown): boolean {
     if (typeof value === 'boolean') return value;
@@ -169,9 +178,6 @@ export class AssessorProfileService {
     /** Mutable profile fields extend beyond strict `Assessor` typings (snake_case API + Mongo flexibility). */
     const a = assessor as unknown as AssessorDocument & Record<string, unknown>;
 
-    const filePath = (f?: Express.Multer.File[]) =>
-      f?.[0] ? `uploads/assessors/${f[0].filename}` : undefined;
-
     // Strict validations for assessor self-submission.
     this.assertRequiredProfileFields(body, assessor, files);
     const email = String(body?.email ?? a.email ?? '').trim().toLowerCase();
@@ -215,15 +221,16 @@ export class AssessorProfileService {
     a.branch_name = bankInfo.branch_name;
     a.ifsc_code = bankInfo.ifsc_code;
 
-    a.profile_image = filePath(files?.profile_image) ?? a.profile_image;
-    a.biodata = filePath(files?.biodata) ?? a.biodata;
-    a.vendor_registration_form = filePath(files?.vendor_registration_form) ?? a.vendor_registration_form;
+    a.profile_image = (await this.uploadField(files?.profile_image)) ?? a.profile_image;
+    a.biodata = (await this.uploadField(files?.biodata)) ?? a.biodata;
+    a.vendor_registration_form =
+      (await this.uploadField(files?.vendor_registration_form)) ?? a.vendor_registration_form;
     a.non_disclosure_agreement =
-      filePath(files?.non_disclosure_agreement) ?? a.non_disclosure_agreement;
-    a.health_declaration = filePath(files?.health_declaration) ?? a.health_declaration;
-    a.gst_declaration = filePath(files?.gst_declaration) ?? a.gst_declaration;
-    a.pan_card = filePath(files?.pan_card) ?? a.pan_card;
-    a.cancelled_cheque = filePath(files?.cancelled_cheque) ?? a.cancelled_cheque;
+      (await this.uploadField(files?.non_disclosure_agreement)) ?? a.non_disclosure_agreement;
+    a.health_declaration = (await this.uploadField(files?.health_declaration)) ?? a.health_declaration;
+    a.gst_declaration = (await this.uploadField(files?.gst_declaration)) ?? a.gst_declaration;
+    a.pan_card = (await this.uploadField(files?.pan_card)) ?? a.pan_card;
+    a.cancelled_cheque = (await this.uploadField(files?.cancelled_cheque)) ?? a.cancelled_cheque;
 
     const prev = (a.document_approvals || {}) as Record<
       string,

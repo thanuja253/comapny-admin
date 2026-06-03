@@ -8,6 +8,8 @@ import { CompanyProject, CompanyProjectDocument } from '../schemas/company-proje
 import { CompanyWorkOrder, CompanyWorkOrderDocument } from '../schemas/company-workorder.schema';
 import { CreateGroupDto } from './dto/create-group.dto';
 import { ListGroupsQueryDto } from './dto/list-groups-query.dto';
+import { S3Service } from '../../s3/s3.service';
+import { persistMulterFile, resolvePublicUrl } from '../../common/stored-file.util';
 
 @Injectable()
 export class GroupManagementService {
@@ -28,15 +30,17 @@ export class GroupManagementService {
     private readonly projectModel: Model<CompanyProjectDocument>,
     @InjectModel(CompanyWorkOrder.name)
     private readonly companyWorkOrderModel: Model<CompanyWorkOrderDocument>,
+    private readonly s3Service: S3Service,
   ) {}
 
   private toAbsoluteFileUrl(path?: string): string {
-    const cleaned = String(path || '').trim();
-    if (!cleaned) return '';
-    if (/^https?:\/\//i.test(cleaned)) return cleaned;
-    const normalized = cleaned.startsWith('/') ? cleaned : `/${cleaned}`;
-    const host = (process.env.API_BASE_URL || process.env.APP_URL || '').trim();
-    return host ? `${host.replace(/\/$/, '')}${normalized}` : normalized;
+    return resolvePublicUrl(this.s3Service, path) || '';
+  }
+
+  private async persistGroupDocument(file?: Express.Multer.File): Promise<string> {
+    if (!file) return '';
+    const { publicUrl } = await persistMulterFile(this.s3Service, file, 'uploads/groups');
+    return publicUrl;
   }
 
   private resolveName(payload: CreateGroupDto): string {
@@ -138,7 +142,7 @@ export class GroupManagementService {
     }
   }
 
-  async createGroup(payload: CreateGroupDto, sampleDocumentPath?: string) {
+  async createGroup(payload: CreateGroupDto, file?: Express.Multer.File) {
     const name = this.resolveName(payload);
     if (!name) {
       throw new BadRequestException('name is required');
@@ -152,10 +156,11 @@ export class GroupManagementService {
       throw new BadRequestException('Group already exists');
     }
 
+    const sampleDocument = await this.persistGroupDocument(file);
     const created = await this.groupModel.create({
       name,
       status: this.resolveStatus(payload),
-      sample_document: sampleDocumentPath || '',
+      sample_document: sampleDocument,
     });
 
     return {
@@ -226,7 +231,7 @@ export class GroupManagementService {
   async updateGroup(
     id: string,
     payload: CreateGroupDto,
-    sampleDocumentPath?: string,
+    file?: Express.Multer.File,
   ) {
     const row = await this.groupModel.findById(id);
     if (!row) {
@@ -257,8 +262,9 @@ export class GroupManagementService {
     const previousName = String(row.name || '').trim();
     row.name = name;
     row.status = nextStatus;
-    if (sampleDocumentPath) {
-      row.sample_document = sampleDocumentPath;
+    const sampleDocument = await this.persistGroupDocument(file);
+    if (sampleDocument) {
+      row.sample_document = sampleDocument;
     }
     await row.save();
 

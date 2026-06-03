@@ -1,6 +1,6 @@
 import { Body, Controller, Get, Param, Post, Put, Query, Req, UploadedFiles, UseInterceptors, UsePipes, ValidationPipe } from '@nestjs/common';
 import { FileFieldsInterceptor } from '@nestjs/platform-express';
-import { diskStorage } from 'multer';
+import { multerMemoryOptions } from '../../common/multer-memory.config';
 import { extname, join } from 'path';
 import * as fs from 'fs';
 import { FacilitatorsService } from './facilitators.service';
@@ -169,17 +169,7 @@ export class FacilitatorsController {
         { name: 'cancelled_cheque', maxCount: 1 },
       ],
       {
-        storage: diskStorage({
-          destination: (req, file, cb) => {
-            const uploadPath = join(process.cwd(), 'uploads', 'facilitators');
-            if (!fs.existsSync(uploadPath)) fs.mkdirSync(uploadPath, { recursive: true });
-            cb(null, uploadPath);
-          },
-          filename: (req, file, cb) => {
-            const unique = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
-            cb(null, `${file.fieldname}-${unique}${extname(file.originalname)}`);
-          },
-        }),
+        
         fileFilter: (req, file, cb) => {
           if (file.fieldname === 'profile_image') {
             const imageTypes = ['image/png', 'image/jpeg', 'image/jpg'];
@@ -240,17 +230,7 @@ export class FacilitatorsController {
         { name: 'cancelled_cheque', maxCount: 1 },
       ],
       {
-        storage: diskStorage({
-          destination: (req, file, cb) => {
-            const uploadPath = join(process.cwd(), 'uploads', 'facilitators');
-            if (!fs.existsSync(uploadPath)) fs.mkdirSync(uploadPath, { recursive: true });
-            cb(null, uploadPath);
-          },
-          filename: (req, file, cb) => {
-            const unique = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
-            cb(null, `${file.fieldname}-${unique}${extname(file.originalname)}`);
-          },
-        }),
+        
         fileFilter: (req, file, cb) => {
           if (file.fieldname === 'profile_image') {
             const imageTypes = ['image/png', 'image/jpeg', 'image/jpg'];
@@ -303,17 +283,7 @@ export class FacilitatorsController {
         { name: 'cancelled_cheque', maxCount: 1 },
       ],
       {
-        storage: diskStorage({
-          destination: (req, file, cb) => {
-            const uploadPath = join(process.cwd(), 'uploads', 'facilitators');
-            if (!fs.existsSync(uploadPath)) fs.mkdirSync(uploadPath, { recursive: true });
-            cb(null, uploadPath);
-          },
-          filename: (req, file, cb) => {
-            const unique = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
-            cb(null, `${file.fieldname}-${unique}${extname(file.originalname)}`);
-          },
-        }),
+        
         fileFilter: (req, file, cb) => {
           if (file.fieldname === 'profile_image') {
             const imageTypes = ['image/png', 'image/jpeg', 'image/jpg'];
@@ -379,17 +349,7 @@ export class FacilitatorsController {
         { name: 'cancelled_cheque', maxCount: 1 },
       ],
       {
-        storage: diskStorage({
-          destination: (req, file, cb) => {
-            const uploadPath = join(process.cwd(), 'uploads', 'facilitators');
-            if (!fs.existsSync(uploadPath)) fs.mkdirSync(uploadPath, { recursive: true });
-            cb(null, uploadPath);
-          },
-          filename: (req, file, cb) => {
-            const unique = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
-            cb(null, `${file.fieldname}-${unique}${extname(file.originalname)}`);
-          },
-        }),
+        
         fileFilter: (req, file, cb) => {
           if (file.fieldname === 'profile_image') {
             const imageTypes = ['image/png', 'image/jpeg', 'image/jpg'];

@@ -75,11 +75,8 @@ import {
 } from '../schemas/master-checklist-sector.schema';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { MailModule } from '../../mail/mail.module';
-import { S3Module } from '../../s3/s3.module';
-
 @Module({
   imports: [
-    S3Module,
     NotificationsModule,
     MailModule,
     MongooseModule.forFeature([

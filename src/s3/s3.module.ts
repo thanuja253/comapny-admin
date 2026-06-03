@@ -1,10 +1,11 @@
 // src/common/s3.module.ts
 
-import { Module } from '@nestjs/common';
+import { Global, Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { S3Service } from './s3.service';
 import { S3Controller } from './s3.controller';
 
+@Global()
 @Module({
   imports: [ConfigModule],
   controllers: [S3Controller],

@@ -74,11 +74,15 @@ import { ReportsQueryDto } from './dto/reports-query.dto';
 import { pickCoordinatorIdFromBody } from './dto/assign-coordinator.dto';
 import { CreateCoordinatorDto } from './dto/create-coordinator.dto';
 import { UpdateCoordinatorDto } from './dto/update-coordinator.dto';
-import { basename, join, relative } from 'path';
-import * as fs from 'fs';
 import type { Response } from 'express';
 import { GridFSBucket } from 'mongodb';
 import { S3Service } from '../../s3/s3.service';
+import {
+  deleteStoredFile,
+  persistMulterFile,
+  resolvePublicUrl,
+  streamStoredFileToResponse,
+} from '../../common/stored-file.util';
 import { getCertificationType } from '../../helpers/certification.helper';
 import { passwordGeneration } from '../../helpers/password.helper';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -172,23 +176,9 @@ function bufferFromRegistrationStored(data: unknown): Buffer | null {
   return null;
 }
 
-/** Multer memoryStorage sets buffer; diskStorage sets path — always persist bytes to MongoDB. */
 function bufferFromMulterFile(file: Express.Multer.File | undefined): Buffer | null {
-  if (!file) return null;
-  if (file.buffer?.length) return file.buffer;
-  const p = (file as Express.Multer.File & { path?: string }).path;
-  if (p && fs.existsSync(p)) {
-    try {
-      return fs.readFileSync(p);
-    } finally {
-      try {
-        fs.unlinkSync(p);
-      } catch {
-        /* ignore */
-      }
-    }
-  }
-  return null;
+  if (!file?.buffer?.length) return null;
+  return file.buffer;
 }
 
 function contentTypeForRegistrationFilename(filename: string, fallback: string): string {
@@ -213,96 +203,15 @@ function uploadsRelativePathFromUrl(filePath: string): string | null {
   return null;
 }
 
-/** Relative path under `process.cwd()` for a stored proposal_document field. */
-function proposalDocumentNormalizedRelativePath(proposalRaw: string): string | null {
-  const trimmed = String(proposalRaw || '').trim();
-  if (!trimmed) return null;
-  if (trimmed.startsWith('http')) {
-    return uploadsRelativePathFromUrl(trimmed);
-  }
-  return trimmed.replace(/^\/+/, '');
+function hasStoredProposalReference(proposalRaw: string): boolean {
+  return Boolean(String(proposalRaw || '').trim());
 }
 
-function proposalDocumentFileMtimeMs(proposalRaw: string): number | null {
-  const normalized = proposalDocumentNormalizedRelativePath(proposalRaw);
-  if (!normalized) return null;
-  const fullPath = join(process.cwd(), normalized);
-  try {
-    if (fs.existsSync(fullPath)) {
-      return fs.statSync(fullPath).mtimeMs;
-    }
-  } catch {
-    /* ignore */
-  }
-  return null;
-}
-
-/** Persisted path for a multer PDF — always derived from the file on disk when possible. */
-function resolveProposalStorageRelativePath(
-  projectId: string,
-  file: Express.Multer.File,
-): string {
-  const absoluteMulterPath =
-    (file as Express.Multer.File & { path?: string }).path ||
-    join(String((file as any).destination || ''), file.filename);
-  const cwd = process.cwd();
-  if (absoluteMulterPath && fs.existsSync(absoluteMulterPath)) {
-    const rel = relative(cwd, absoluteMulterPath).replace(/\\/g, '/');
-    if (rel && !rel.startsWith('..')) {
-      return rel.replace(/^\/+/, '');
-    }
-  }
-  return `uploads/company/${projectId}/${file.filename}`;
-}
-
-/** Ensures the PDF lives under `uploads/company/{mongoProjectId}/` (moves from URL-param folder if needed). */
-function normalizeProposalStoragePath(
-  projectId: string,
-  file: Express.Multer.File,
-): string {
-  const relativePath = resolveProposalStorageRelativePath(projectId, file);
-  const normalized = relativePath.replace(/^\/+/, '');
-  const expectedPrefix = `uploads/company/${projectId}/`;
-  if (normalized.startsWith(expectedPrefix)) {
-    return normalized;
-  }
-  const cwd = process.cwd();
-  const srcFull = join(cwd, normalized);
-  if (!fs.existsSync(srcFull)) {
-    return normalized;
-  }
-  const destDir = join(cwd, 'uploads', 'company', projectId);
-  if (!fs.existsSync(destDir)) {
-    fs.mkdirSync(destDir, { recursive: true });
-  }
-  const destName = basename(normalized) || file.filename || `proposal-${Date.now()}.pdf`;
-  const destFull = join(destDir, destName);
-  if (srcFull !== destFull) {
-    try {
-      fs.renameSync(srcFull, destFull);
-    } catch {
-      fs.copyFileSync(srcFull, destFull);
-      try {
-        fs.unlinkSync(srcFull);
-      } catch {
-        /* ignore */
-      }
-    }
-  }
-  return `${expectedPrefix}${destName}`;
-}
-
-function removeProposalFileIfLocal(proposalRaw: string): void {
-  const trimmed = String(proposalRaw || '').trim();
-  if (!trimmed || trimmed.startsWith('http')) return;
-  const normalized = trimmed.replace(/^\/+/, '');
-  const oldFull = join(process.cwd(), normalized);
-  if (!normalized || !fs.existsSync(oldFull)) return;
-  try {
-    fs.unlinkSync(oldFull);
-  } catch (e) {
-    console.warn('[Proposal Document] Could not remove old file:', (e as any)?.message || e);
-  }
+async function removeStoredProposalFile(
+  s3: S3Service,
+  proposalRaw: string,
+): Promise<void> {
+  await deleteStoredFile(s3, proposalRaw);
 }
 
 /**
@@ -324,10 +233,7 @@ function buildProposalDocumentViewUrl(
   projectUpdatedAt?: Date | null,
 ): { document_url: string; document_cache_bust: string } {
   const path = `/api/company/projects/${projectId}/proposal-document/file`;
-  let bust = proposalDocumentFileMtimeMs(proposalRaw);
-  if (bust == null && projectUpdatedAt) {
-    bust = projectUpdatedAt.getTime();
-  }
+  let bust = projectUpdatedAt?.getTime() ?? null;
   if (bust == null) bust = Date.now();
   // Integer string avoids `v=...4502` floats that break some clients parsing URLs as filenames.
   const document_cache_bust = String(Math.round(Number(bust)));
@@ -377,7 +283,6 @@ function registrationS3KeyFromReg(reg: Record<string, any>, key: string): string
 
 export type RegistrationFileDownload =
   | { kind: 'buffer'; buffer: Buffer; filename: string; contentType: string }
-  | { kind: 'disk'; fullPath: string; filename: string; contentType: string }
   | { kind: 's3'; key: string; filename: string; contentType: string }
   | { kind: 'legacy-gridfs'; fileId: Types.ObjectId; filename: string; contentType: string };
 
@@ -474,6 +379,28 @@ export class CompanyProjectsService {
     return `${REGISTRATION_S3_FOLDER}/${projectId}`;
   }
 
+  private async persistUpload(file: Express.Multer.File, folder: string): Promise<string> {
+    const { publicUrl } = await persistMulterFile(this.s3Service, file, folder);
+    return publicUrl;
+  }
+
+  private async uploadAssessorFile(f?: Express.Multer.File[]): Promise<string> {
+    return f?.[0] ? this.persistUpload(f[0], 'uploads/assessors') : '';
+  }
+
+  private async uploadAssessorFileOptional(f?: Express.Multer.File[]): Promise<string | undefined> {
+    return f?.[0] ? this.persistUpload(f[0], 'uploads/assessors') : undefined;
+  }
+
+  async streamStoredDocument(
+    res: Response,
+    stored: string,
+    filename: string,
+    contentType = 'application/pdf',
+  ): Promise<void> {
+    await streamStoredFileToResponse(this.s3Service, res, stored, filename, contentType);
+  }
+
   /** Read-only: existing MongoDB rows may still reference GridFS file ids. */
   private getLegacyRegistrationGridfsBucket(): GridFSBucket {
     const db = this.mongoConnection.db;
@@ -542,7 +469,7 @@ export class CompanyProjectsService {
   }
 
   /**
-   * Send registration attachment to the HTTP response (S3, embedded buffer, or legacy disk).
+   * Send registration attachment to the HTTP response (S3, embedded buffer, or legacy GridFS).
    */
   async streamRegistrationFileToResponse(res: Response, download: RegistrationFileDownload): Promise<void> {
     res.setHeader('Content-Type', download.contentType);
@@ -551,12 +478,6 @@ export class CompanyProjectsService {
 
     if (download.kind === 'buffer') {
       res.status(200).send(download.buffer);
-      return;
-    }
-    if (download.kind === 'disk') {
-      await new Promise<void>((resolve, reject) => {
-        res.status(200).sendFile(download.fullPath, (err) => (err ? reject(err) : resolve()));
-      });
       return;
     }
 
@@ -588,8 +509,8 @@ export class CompanyProjectsService {
   }
 
   /**
-   * Old clients / DB rows used URLs like /uploads/registration/:projectId/:filename (disk multer).
-   * Resolves via S3 key, legacy buffer, or disk path.
+   * Old clients / DB rows used URLs like /uploads/registration/:projectId/:filename.
+   * Resolves via S3, legacy GridFS, or embedded buffer.
    */
   async streamLegacyRegistrationUploadPath(
     projectId: string,
@@ -2046,14 +1967,11 @@ export class CompanyProjectsService {
       });
     }
 
-    const filePath = (f?: Express.Multer.File[]) =>
-      f?.[0] ? `uploads/assessors/${f[0].filename}` : '';
     const bankInfo = await this.deriveBankDetails(dto.ifsc_code, dto.bank_name, dto.branch_name);
 
     const document_approvals: Record<string, { status: string; remarks: string }> = {};
     for (const key of ASSESSOR_PROFILE_DOCUMENT_KEYS) {
-      const p = filePath((files as any)?.[key]);
-      if (String(p || '').trim()) {
+      if (files?.[key as keyof typeof files]?.[0]) {
         document_approvals[key] = { status: 'Approved', remarks: '' };
       }
     }
@@ -2092,14 +2010,14 @@ export class CompanyProjectsService {
       account_number: dto.account_number || '',
       branch_name: bankInfo.branch_name || '',
       ifsc_code: bankInfo.ifsc_code || '',
-      biodata: filePath(files?.biodata),
-      vendor_registration_form: filePath(files?.vendor_registration_form),
-      non_disclosure_agreement: filePath(files?.non_disclosure_agreement),
-      health_declaration: filePath(files?.health_declaration),
-      gst_declaration: filePath(files?.gst_declaration),
-      pan_card: filePath(files?.pan_card),
-      cancelled_cheque: filePath(files?.cancelled_cheque),
-      profile_image: filePath(files?.profile_image),
+      biodata: await this.uploadAssessorFile(files?.biodata),
+      vendor_registration_form: await this.uploadAssessorFile(files?.vendor_registration_form),
+      non_disclosure_agreement: await this.uploadAssessorFile(files?.non_disclosure_agreement),
+      health_declaration: await this.uploadAssessorFile(files?.health_declaration),
+      gst_declaration: await this.uploadAssessorFile(files?.gst_declaration),
+      pan_card: await this.uploadAssessorFile(files?.pan_card),
+      cancelled_cheque: await this.uploadAssessorFile(files?.cancelled_cheque),
+      profile_image: await this.uploadAssessorFile(files?.profile_image),
     });
 
     return {
@@ -2139,8 +2057,6 @@ export class CompanyProjectsService {
       });
     }
 
-    const filePath = (f?: Express.Multer.File[]) =>
-      f?.[0] ? `uploads/assessors/${f[0].filename}` : undefined;
     const bankInfo = await this.deriveBankDetails(
       dto.ifsc_code ?? assessor.ifsc_code,
       dto.bank_name ?? assessor.bank_name,
@@ -2180,14 +2096,22 @@ export class CompanyProjectsService {
     assessor.approval_remarks = '';
     assessor.profile_status = 'Complete';
 
-    assessor.profile_image = filePath(files?.profile_image) ?? assessor.profile_image;
-    assessor.biodata = filePath(files?.biodata) ?? assessor.biodata;
-    assessor.vendor_registration_form = filePath(files?.vendor_registration_form) ?? assessor.vendor_registration_form;
-    assessor.non_disclosure_agreement = filePath(files?.non_disclosure_agreement) ?? assessor.non_disclosure_agreement;
-    assessor.health_declaration = filePath(files?.health_declaration) ?? assessor.health_declaration;
-    assessor.gst_declaration = filePath(files?.gst_declaration) ?? assessor.gst_declaration;
-    assessor.pan_card = filePath(files?.pan_card) ?? assessor.pan_card;
-    assessor.cancelled_cheque = filePath(files?.cancelled_cheque) ?? assessor.cancelled_cheque;
+    assessor.profile_image =
+      (await this.uploadAssessorFileOptional(files?.profile_image)) ?? assessor.profile_image;
+    assessor.biodata = (await this.uploadAssessorFileOptional(files?.biodata)) ?? assessor.biodata;
+    assessor.vendor_registration_form =
+      (await this.uploadAssessorFileOptional(files?.vendor_registration_form)) ??
+      assessor.vendor_registration_form;
+    assessor.non_disclosure_agreement =
+      (await this.uploadAssessorFileOptional(files?.non_disclosure_agreement)) ??
+      assessor.non_disclosure_agreement;
+    assessor.health_declaration =
+      (await this.uploadAssessorFileOptional(files?.health_declaration)) ?? assessor.health_declaration;
+    assessor.gst_declaration =
+      (await this.uploadAssessorFileOptional(files?.gst_declaration)) ?? assessor.gst_declaration;
+    assessor.pan_card = (await this.uploadAssessorFileOptional(files?.pan_card)) ?? assessor.pan_card;
+    assessor.cancelled_cheque =
+      (await this.uploadAssessorFileOptional(files?.cancelled_cheque)) ?? assessor.cancelled_cheque;
 
     const prevAdmin = ((assessor as any).document_approvals || {}) as Record<
       string,
@@ -2507,7 +2431,7 @@ export class CompanyProjectsService {
    * get certificate document file path by project id only.
    */
   async getCertificateDocumentDownloadByProjectId(projectId: string): Promise<{
-    absolutePath: string;
+    stored: string;
     filename: string;
   }> {
     const project = await this.projectModel.findById(projectId).lean();
@@ -2518,29 +2442,21 @@ export class CompanyProjectsService {
       });
     }
 
-    const relativePath = String((project as any).certificate_document_url || '').trim();
-    if (!relativePath) {
+    const stored = String((project as any).certificate_document_url || '').trim();
+    if (!stored) {
       throw new NotFoundException({
         status: 'error',
         message: 'Certificate document not found',
       });
     }
 
-    const absolutePath = join(process.cwd(), relativePath);
-    if (!fs.existsSync(absolutePath)) {
-      throw new NotFoundException({
-        status: 'error',
-        message: 'Certificate file not found on server',
-      });
-    }
-
     return {
-      absolutePath,
+      stored,
       filename: String((project as any).certificate_document_filename || 'certificate.pdf'),
     };
   }
 
-  async getScoreBandPdfPath(companyId: string, projectId: string): Promise<string> {
+  async streamScoreBandPdf(companyId: string, projectId: string, res: Response): Promise<void> {
     const project = await this.projectModel.findOne({
       _id: projectId,
       company_id: companyId,
@@ -2553,24 +2469,16 @@ export class CompanyProjectsService {
       });
     }
 
-    if (!project.score_band_pdf_path) {
+    const stored = String(project.score_band_pdf_path || '').trim();
+    if (!stored) {
       throw new NotFoundException({
         status: 'error',
         message: 'Score band not available',
       });
     }
 
-    const relativePath = project.score_band_pdf_path;
-    const absolutePath = join(process.cwd(), relativePath);
-
-    if (!fs.existsSync(absolutePath)) {
-      throw new NotFoundException({
-        status: 'error',
-        message: 'Score band PDF file not found on server',
-      });
-    }
-
-    return absolutePath;
+    const filename = stored.split('/').pop() || 'Score_Band.pdf';
+    await this.streamStoredDocument(res, stored, filename, 'application/pdf');
   }
 
   /**
@@ -2589,10 +2497,10 @@ export class CompanyProjectsService {
     if (!project) {
       throw new NotFoundException({ status: 'error', message: 'Project not found' });
     }
-    const relativePath = `uploads/company_certificate/${projectId}/${file.filename}`;
+    const publicUrl = await this.persistUpload(file, `uploads/company_certificate/${projectId}`);
     const expiry = new Date();
     expiry.setFullYear(expiry.getFullYear() + 3);
-    project.certificate_document_url = relativePath;
+    project.certificate_document_url = publicUrl;
     project.certificate_document_filename = file.originalname || 'certificate.pdf';
     project.certificate_upload_date = new Date();
     project.certificate_expiry_date = expiry;
@@ -2619,7 +2527,7 @@ export class CompanyProjectsService {
       status: 'success',
       message: 'Certificate uploaded successfully',
       data: {
-        certificate_document_url: relativePath,
+        certificate_document_url: publicUrl,
         certificate_document_filename: project.certificate_document_filename,
       },
     };
@@ -2663,8 +2571,8 @@ export class CompanyProjectsService {
     if (!project) {
       throw new NotFoundException({ status: 'error', message: 'Project not found' });
     }
-    const relativePath = `uploads/company_feedback/${projectId}/${file.filename}`;
-    project.feedback_document_url = relativePath;
+    const publicUrl = await this.persistUpload(file, `uploads/company_feedback/${projectId}`);
+    project.feedback_document_url = publicUrl;
     project.feedback_document_filename = file.originalname || 'feedback.pdf';
     project.feedback_upload_date = new Date();
     // Move main flow to milestone 23 (Feedback Report uploaded) → next 24 (close-out)
@@ -2690,7 +2598,7 @@ export class CompanyProjectsService {
       status: 'success',
       message: 'Feedback uploaded successfully',
       data: {
-        feedback_document_url: relativePath,
+        feedback_document_url: publicUrl,
         feedback_document_filename: project.feedback_document_filename,
       },
     };
@@ -4375,7 +4283,7 @@ export class CompanyProjectsService {
   }
 
   /**
-   * Resolve registration attachment for download: S3, legacy GridFS, embedded buffer, or disk path.
+   * Resolve registration attachment for download: S3, legacy GridFS, or embedded buffer.
    */
   async resolveRegistrationFileDownload(
     registrationInfo: Record<string, any> | undefined,
@@ -4421,18 +4329,15 @@ export class CompanyProjectsService {
       }
       const url = reg.company_brief_profile_url;
       if (typeof url === 'string') {
-        const rel = uploadsRelativePathFromUrl(url);
-        if (rel) {
-          const fullPath = join(process.cwd(), rel);
-          if (fs.existsSync(fullPath)) {
-            const filename = reg.company_brief_profile_filename || 'company_brief_profile';
-            return {
-              kind: 'disk',
-              fullPath,
-              filename: String(filename),
-              contentType: contentTypeForRegistrationFilename(String(filename), 'application/octet-stream'),
-            };
-          }
+        const key = this.s3Service.extractKey(url) || uploadsRelativePathFromUrl(url);
+        if (key) {
+          const filename = reg.company_brief_profile_filename || 'company_brief_profile';
+          return {
+            kind: 's3',
+            key,
+            filename: String(filename),
+            contentType: contentTypeForRegistrationFilename(String(filename), 'application/octet-stream'),
+          };
         }
       }
       throw new NotFoundException({ status: 'error', message: 'File not found' });
@@ -4474,18 +4379,15 @@ export class CompanyProjectsService {
       }
       const url = reg.turnover_document_url;
       if (typeof url === 'string') {
-        const rel = uploadsRelativePathFromUrl(url);
-        if (rel) {
-          const fullPath = join(process.cwd(), rel);
-          if (fs.existsSync(fullPath)) {
-            const filename = reg.turnover_document_filename || 'turnover_document';
-            return {
-              kind: 'disk',
-              fullPath,
-              filename: String(filename),
-              contentType: contentTypeForRegistrationFilename(String(filename), 'application/octet-stream'),
-            };
-          }
+        const key = this.s3Service.extractKey(url) || uploadsRelativePathFromUrl(url);
+        if (key) {
+          const filename = reg.turnover_document_filename || 'turnover_document';
+          return {
+            kind: 's3',
+            key,
+            filename: String(filename),
+            contentType: contentTypeForRegistrationFilename(String(filename), 'application/octet-stream'),
+          };
         }
       }
       throw new NotFoundException({ status: 'error', message: 'File not found' });
@@ -4527,18 +4429,15 @@ export class CompanyProjectsService {
       }
       const url = reg.sez_document_url;
       if (typeof url === 'string') {
-        const rel = uploadsRelativePathFromUrl(url);
-        if (rel) {
-          const fullPath = join(process.cwd(), rel);
-          if (fs.existsSync(fullPath)) {
-            const filename = reg.sez_document_filename || 'sez_document';
-            return {
-              kind: 'disk',
-              fullPath,
-              filename: String(filename),
-              contentType: contentTypeForRegistrationFilename(String(filename), 'application/pdf'),
-            };
-          }
+        const key = this.s3Service.extractKey(url) || uploadsRelativePathFromUrl(url);
+        if (key) {
+          const filename = reg.sez_document_filename || 'sez_document';
+          return {
+            kind: 's3',
+            key,
+            filename: String(filename),
+            contentType: contentTypeForRegistrationFilename(String(filename), 'application/pdf'),
+          };
         }
       }
       throw new NotFoundException({ status: 'error', message: 'File not found' });
@@ -5736,30 +5635,21 @@ export class CompanyProjectsService {
 
     const hadExistingProposal = !!project.proposal_document;
 
-    const relativePath = normalizeProposalStoragePath(projectId, file);
-    const fullStored = join(process.cwd(), relativePath);
-    if (!fs.existsSync(fullStored)) {
-      throw new BadRequestException({
-        status: 'error',
-        message:
-          'Uploaded file could not be stored on the server. Retry the upload and ensure the API path uses the project Mongo _id.',
-      });
-    }
+    const publicUrl = await this.persistUpload(file, `uploads/company/${projectId}/proposals`);
 
     const previousProposalPath = hadExistingProposal
       ? String(project.proposal_document || '').trim()
       : '';
 
-    // Save proposal document as relative path so server can move host/base URL safely.
-    project.proposal_document = relativePath;
+    project.proposal_document = publicUrl;
     await project.save();
 
     if (
       hadExistingProposal &&
       previousProposalPath &&
-      previousProposalPath !== relativePath
+      previousProposalPath !== publicUrl
     ) {
-      removeProposalFileIfLocal(previousProposalPath);
+      await removeStoredProposalFile(this.s3Service, previousProposalPath);
     }
 
     // Generate company registration ID if not exists (similar to Laravel flow)
@@ -5943,26 +5833,15 @@ export class CompanyProjectsService {
 
     const previousProposalPath = String(project.proposal_document || '').trim();
 
-    const relativePath = normalizeProposalStoragePath(projectId, file);
-    const fullStored = join(process.cwd(), relativePath);
-    if (!fs.existsSync(fullStored)) {
-      throw new BadRequestException({
-        status: 'error',
-        message:
-          'Uploaded file could not be stored on the server. Retry the upload and ensure the API path uses the project Mongo _id.',
-      });
-    }
+    const publicUrl = await this.persistUpload(file, `uploads/company/${projectId}/proposals`);
 
-    project.proposal_document = relativePath;
+    project.proposal_document = publicUrl;
     // Company’s turn again: re-upload work order against the revised proposal (same cycle as first time after proposal).
     project.next_activities_id = 4;
     await project.save();
 
-    if (
-      previousProposalPath &&
-      previousProposalPath !== relativePath
-    ) {
-      removeProposalFileIfLocal(previousProposalPath);
+    if (previousProposalPath && previousProposalPath !== publicUrl) {
+      await removeStoredProposalFile(this.s3Service, previousProposalPath);
     }
 
     await this.companyActivityModel.create({
@@ -6143,10 +6022,8 @@ export class CompanyProjectsService {
       proposalRaw,
       (project as any).updatedAt,
     );
-    const fileMtimeMs = proposalDocumentFileMtimeMs(proposalRaw);
-    const proposal_file_updated_at = fileMtimeMs
-      ? new Date(fileMtimeMs).toISOString()
-      : (project as any).updatedAt?.toISOString?.() ?? null;
+    const proposal_file_updated_at =
+      (project as any).updatedAt?.toISOString?.() ?? (project as any).createdAt?.toISOString?.() ?? null;
 
     return {
       status: 'success',
@@ -6165,7 +6042,7 @@ export class CompanyProjectsService {
         proposal_remarks: proposalRemarks,
         /** Last change to workflow / WO relative to proposal review (may differ from file upload time). */
         proposal_status_updated_at: proposalStatusUpdatedAt,
-        /** When the PDF on disk was last modified (best for showing “latest file” after reupload). */
+        /** When the project record was last updated (proxy for latest proposal upload). */
         proposal_file_updated_at,
         document_url,
         /** Same as `v` on `document_url` — use to force-refresh embedded PDF viewers. */
@@ -6263,12 +6140,9 @@ export class CompanyProjectsService {
       proposalRaw,
       (project as any).updatedAt,
     );
-    const fileMtimeMs = proposalDocumentFileMtimeMs(proposalRaw);
-    const proposal_file_updated_at = fileMtimeMs
-      ? new Date(fileMtimeMs).toISOString()
-      : (project as any).updatedAt
-        ? new Date((project as any).updatedAt).toISOString()
-        : null;
+    const proposal_file_updated_at = (project as any).updatedAt
+      ? new Date((project as any).updatedAt).toISOString()
+      : null;
 
     return {
       status: 'success' as const,
@@ -6295,31 +6169,12 @@ export class CompanyProjectsService {
       throw new NotFoundException({ status: 'error', message: 'Proposal document not uploaded yet' });
     }
 
-    const normalized = proposalRaw.startsWith('http')
-      ? (uploadsRelativePathFromUrl(proposalRaw) || '')
-      : proposalRaw.replace(/^\/+/, '');
-    const fullPath = join(process.cwd(), normalized);
-    if (!normalized || !fs.existsSync(fullPath)) {
-      throw new NotFoundException({ status: 'error', message: 'File not found' });
-    }
-
-    const filename = normalized.split('/').pop() || 'proposal.pdf';
+    const filename = proposalRaw.split('/').pop() || 'proposal.pdf';
     const contentType = contentTypeForRegistrationFilename(filename, 'application/pdf');
-    try {
-      const st = fs.statSync(fullPath);
-      res.setHeader('Cache-Control', 'private, no-store, no-cache, must-revalidate, max-age=0');
-      res.setHeader('Pragma', 'no-cache');
-      res.setHeader('Expires', '0');
-      res.setHeader('ETag', `W/"${st.size}-${Math.round(st.mtimeMs)}"`);
-    } catch {
-      res.setHeader('Cache-Control', 'private, no-store, no-cache, must-revalidate, max-age=0');
-    }
-    await this.streamRegistrationFileToResponse(res, {
-      kind: 'disk',
-      fullPath,
-      filename,
-      contentType,
-    });
+    res.setHeader('Cache-Control', 'private, no-store, no-cache, must-revalidate, max-age=0');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+    await this.streamStoredDocument(res, proposalRaw, filename, contentType);
   }
 
   /**
@@ -6346,8 +6201,7 @@ export class CompanyProjectsService {
     }
 
     const baseUrl = process.env.API_BASE_URL || 'https://comapny-admin.onrender.com';
-    const relativePath = `uploads/resources/${projectId}/${file.filename}`;
-    const fullUrl = `${baseUrl}/${relativePath}`;
+    const fullUrl = await this.persistUpload(file, `uploads/resources/${projectId}`);
 
     // Create resource document entry
     const resourceDoc = new this.companyResourceDocumentModel({
@@ -6584,17 +6438,16 @@ export class CompanyProjectsService {
     if (hasProposalDoc) {
       const proposalRaw = String(proposalDocValue).trim();
       const storageFilename = proposalRaw.split('/').pop() || 'proposal.pdf';
-      const fileOnDisk = proposalDocumentFileMtimeMs(proposalRaw) != null;
+      const hasStored = hasStoredProposalReference(proposalRaw);
       const { document_url, document_cache_bust } = buildProposalDocumentViewUrl(
         projectId,
         proposalRaw,
         projectAny.updatedAt,
       );
       response.proposal_document = {
-        has_document: fileOnDisk,
-        is_proposal_pdf_on_server: fileOnDisk,
-        /** True when Mongo has a path but this API instance has no file on disk (wrong port or missing upload). */
-        file_missing_on_server: !fileOnDisk,
+        has_document: hasStored,
+        is_proposal_pdf_on_server: hasStored,
+        file_missing_on_server: false,
         /** Same viewer URL as GET …/proposal-document (`/proposal-document/file?v=…`), not raw `/uploads/…`. */
         document_url,
         document_cache_bust,
@@ -7504,7 +7357,7 @@ export class CompanyProjectsService {
       });
     }
 
-    const relativePath = `uploads/companyproject/launchAndTraining/${projectId}/${file.filename}`;
+    const publicUrl = await this.persistUpload(file, `uploads/companyproject/launchAndTraining/${projectId}`);
     const sessionDate = sessionDateRaw
       ? (() => {
           const d = new Date(sessionDateRaw);
@@ -7513,7 +7366,7 @@ export class CompanyProjectsService {
       : undefined;
 
     const entry = {
-      relative_path: relativePath,
+      relative_path: publicUrl,
       original_filename: file.originalname,
       session_date: sessionDate,
       uploaded_at: new Date(),
@@ -7522,8 +7375,8 @@ export class CompanyProjectsService {
     (project as any).launch_training_sessions = existing;
     await project.save();
 
+    const fullUrl = publicUrl;
     const baseUrl = process.env.API_BASE_URL || 'https://comapny-admin.onrender.com';
-    const fullUrl = `${baseUrl}/${relativePath.replace(/^\//, '')}`;
 
     const company = await this.companyModel.findById(companyId).lean();
     this.notificationsService
@@ -7636,10 +7489,8 @@ export class CompanyProjectsService {
 
     const baseUrl = process.env.API_BASE_URL || 'https://comapny-admin.onrender.com';
 
-    const toUrl = (path: string | undefined): string | null => {
-      if (!path) return null;
-      return path.startsWith('http') ? path : `${baseUrl}/${path.replace(/^\//, '')}`;
-    };
+    const toUrl = (path: string | undefined): string | null =>
+      resolvePublicUrl(this.s3Service, path, baseUrl);
 
     const projectAny = project as any;
 
@@ -7898,10 +7749,7 @@ export class CompanyProjectsService {
       .lean();
 
     const baseUrl = (process.env.API_BASE_URL || 'https://comapny-admin.onrender.com').replace(/\/+$/, '');
-    const toUrl = (path: string | undefined) => {
-      if (!path) return null;
-      return path.startsWith('http') ? path : `${baseUrl}/${path.replace(/^\/+/, '')}`;
-    };
+    const toUrl = (path: string | undefined) => resolvePublicUrl(this.s3Service, path, baseUrl);
 
     return {
       status: 'success',
@@ -8072,7 +7920,7 @@ export class CompanyProjectsService {
       }
     }
 
-    const relativePath = `uploads/company/${projectId}/finance-v2/${file.filename}`;
+    const publicUrl = await this.persistUpload(file, `uploads/company/${projectId}/finance-v2`);
     const reminderDate =
       Number(dto.send_reminder) === 1
         ? new Date(Date.now() + FINANCE_V2_REMINDER_INTERVAL_DAYS * 24 * 60 * 60 * 1000)
@@ -8084,10 +7932,10 @@ export class CompanyProjectsService {
       payment_for: paymentFor,
       invoice_type: dto.invoice_type,
       invoice_title: dto.invoice_title,
-      invoice_document: relativePath,
+      invoice_document: publicUrl,
       invoice_document_filename: file.originalname,
       invoice_document_history: [
-        { path: relativePath, filename: file.originalname, uploaded_at: new Date() },
+        { path: publicUrl, filename: file.originalname, uploaded_at: new Date() },
       ],
       payable_amount: payable,
       sgst: gst.sgst_rate,
@@ -8251,12 +8099,12 @@ export class CompanyProjectsService {
     }
 
     if (file) {
-      const relativePath = `uploads/company/${projectId}/finance-v2/${file.filename}`;
+      const publicUrl = await this.persistUpload(file, `uploads/company/${projectId}/finance-v2`);
       const hist = Array.isArray((existing as any).invoice_document_history)
         ? [...(existing as any).invoice_document_history]
         : [];
-      hist.push({ path: relativePath, filename: file.originalname, uploaded_at: new Date() });
-      existing.invoice_document = relativePath;
+      hist.push({ path: publicUrl, filename: file.originalname, uploaded_at: new Date() });
+      existing.invoice_document = publicUrl;
       existing.invoice_document_filename = file.originalname;
       (existing as any).invoice_document_history = hist;
     }
@@ -8528,12 +8376,12 @@ export class CompanyProjectsService {
       });
     }
 
-    const relativePath = file
-      ? `uploads/company/${projectId}/finance-v2-payments/${file.filename}`
+    const paymentDocUrl = file
+      ? await this.persistUpload(file, `uploads/company/${projectId}/finance-v2-payments`)
       : undefined;
     (invoice as any).payment_type = normalizedPaymentType;
     (invoice as any).trans_id = normalizedPaymentType === 'Offline' ? normalizedTransId : undefined;
-    if (relativePath) {
+    if (paymentDocUrl) {
       const oldDoc = (invoice as any).offline_tran_doc;
       const oldName = (invoice as any).offline_tran_doc_filename;
       const appendIfNew = (arr: any[], entry: { path: string; filename?: string; uploaded_at: Date }) => {
@@ -8548,9 +8396,9 @@ export class CompanyProjectsService {
       if (oldDoc) {
         appendIfNew(prev, { path: oldDoc, filename: oldName, uploaded_at: new Date() });
       }
-      (invoice as any).offline_tran_doc = relativePath;
+      (invoice as any).offline_tran_doc = paymentDocUrl;
       (invoice as any).offline_tran_doc_filename = file!.originalname;
-      appendIfNew(prev, { path: relativePath, filename: file!.originalname, uploaded_at: new Date() });
+      appendIfNew(prev, { path: paymentDocUrl, filename: file!.originalname, uploaded_at: new Date() });
       (invoice as any).offline_tran_doc_history = prev;
     }
     (invoice as any).paid_amount = nextPaid;
@@ -8786,8 +8634,7 @@ export class CompanyProjectsService {
       .lean();
 
     const baseUrl = process.env.API_BASE_URL || 'https://comapny-admin.onrender.com';
-    const toUrl = (path: string | undefined) =>
-      !path ? null : path.startsWith('http') ? path : `${baseUrl}/${path.replace(/^\//, '')}`;
+    const toUrl = (path: string | undefined) => resolvePublicUrl(this.s3Service, path, baseUrl);
 
     return {
       status: 'success',
@@ -8860,10 +8707,7 @@ export class CompanyProjectsService {
       .lean();
 
     const baseUrl = process.env.API_BASE_URL || 'https://comapny-admin.onrender.com';
-    const toUrl = (path: string | undefined) => {
-      if (!path) return null;
-      return path.startsWith('http') ? path : `${baseUrl}/${path.replace(/^\//, '')}`;
-    };
+    const toUrl = (path: string | undefined) => resolvePublicUrl(this.s3Service, path, baseUrl);
 
     const list = invoices.map((inv: any, idx: number) => ({
       id: inv._id.toString(),
@@ -8941,14 +8785,14 @@ export class CompanyProjectsService {
     const sgstAmount = (invoiceamount * sgst) / 100;
     const igstAmount = (invoiceamount * igst) / 100;
     const total_amount = invoiceamount + cgstAmount + sgstAmount + igstAmount;
-    const relativePath = `uploads/company/${String(resolved.company_id)}/expenses/${file.filename}`;
+    const publicUrl = await this.persistUpload(file, `uploads/company/${String(resolved.company_id)}/expenses`);
 
     await this.companyInvoiceModel.create({
       company_id: String(resolved.company_id),
       project_id: String(resolved._id),
       payment_for: payload.payment_for,
       invoice_title: payload.invoicetitle,
-      invoice_document: relativePath,
+      invoice_document: publicUrl,
       invoice_document_filename: file.originalname,
       payable_amount: invoiceamount,
       sgst,
@@ -9013,7 +8857,10 @@ export class CompanyProjectsService {
     invoice.total_amount = total_amount;
     invoice.payment_date = new Date(payload.payment_date);
     if (file) {
-      invoice.invoice_document = `uploads/company/${String(resolved.company_id)}/expenses/${file.filename}`;
+      invoice.invoice_document = await this.persistUpload(
+        file,
+        `uploads/company/${String(resolved.company_id)}/expenses`,
+      );
       invoice.invoice_document_filename = file.originalname;
     }
 
@@ -9544,7 +9391,7 @@ export class CompanyProjectsService {
       throw new NotFoundException({ status: 'error', message: 'Project not found' });
     }
 
-    const relativePath = `uploads/company/${companyId}/invoices/${file.filename}`;
+    const publicUrl = await this.persistUpload(file, `uploads/company/${companyId}/invoices`);
     const invoice = await this.companyInvoiceModel.create({
       company_id: companyId,
       project_id: projectId,
@@ -9552,7 +9399,7 @@ export class CompanyProjectsService {
       payable_amount: 0,
       tax_amount: 0,
       total_amount: 0,
-      invoice_document: relativePath,
+      invoice_document: publicUrl,
       invoice_document_filename: file.originalname,
     });
 
@@ -9610,16 +9457,13 @@ export class CompanyProjectsService {
       this.mailService.sendInvoiceRaisedEmail(company.email, company.name || 'Company', invoiceLabel, projectCode).catch((e) => console.error('Invoice email to company failed:', e));
     }
 
-    const baseUrl = process.env.API_BASE_URL || 'https://comapny-admin.onrender.com';
-    const documentUrl = relativePath.startsWith('http') ? relativePath : `${baseUrl}/${relativePath.replace(/^\//, '')}`;
-
     return {
       status: 'success',
       message: paymentFor === PAYMENT_FOR_PROFORMA ? 'Proforma Invoice uploaded successfully' : 'Tax Invoice uploaded successfully',
       data: {
         invoice_id: invoice._id.toString(),
         payment_for: invoice.payment_for,
-        invoice_document: documentUrl,
+        invoice_document: publicUrl,
         invoice_document_filename: invoice.invoice_document_filename,
       },
     };
@@ -9668,14 +9512,14 @@ export class CompanyProjectsService {
       }
     }
 
-    const relativePath = file
-      ? `uploads/company/${companyId}/${file.filename}`
+    const paymentDocUrl = file
+      ? await this.persistUpload(file, `uploads/company/${companyId}/payments`)
       : undefined;
 
     invoice.payment_type = dto.payment_type;
     invoice.trans_id = dto.payment_type === 'Offline' ? dto.trans_id?.trim() : undefined;
-    if (relativePath) {
-      invoice.offline_tran_doc = relativePath;
+    if (paymentDocUrl) {
+      invoice.offline_tran_doc = paymentDocUrl;
       invoice.offline_tran_doc_filename = file!.originalname;
     }
     invoice.payment_status = 1; // Mark as paid/submitted
@@ -9889,10 +9733,8 @@ export class CompanyProjectsService {
       })
       .sort({ createdAt: -1 });
 
-    const baseUrl = process.env.API_BASE_URL || 'https://comapny-admin.onrender.com';
-    // Use Laravel-compatible path: uploads/companyproject/{projectId}/
-    const relativePath = `uploads/companyproject/${projectId}/${file.filename}`;
-    const fullUrl = `${baseUrl}/${relativePath}`;
+    const publicUrl = await this.persistUpload(file, `uploads/companyproject/${projectId}/work-order`);
+    const fullUrl = publicUrl;
 
     // Create or update work order document
     let workOrder;
@@ -9900,7 +9742,7 @@ export class CompanyProjectsService {
 
     if (existingWorkOrder && isReUpload) {
       // Update existing work order (re-upload after rejection)
-      existingWorkOrder.wo_doc = relativePath;
+      existingWorkOrder.wo_doc = publicUrl;
       existingWorkOrder.wo_status = 0; // Reset to Under Review
       existingWorkOrder.wo_remarks = null; // Clear previous remarks
       (existingWorkOrder as any).wo_po_number = undefined;
@@ -9912,7 +9754,7 @@ export class CompanyProjectsService {
       workOrder = await this.companyWorkOrderModel.create({
         company_id: companyId,
         project_id: projectId,
-        wo_doc: relativePath,
+        wo_doc: publicUrl,
         wo_status: 0, // Under Review
         wo_remarks: null,
       });
@@ -10011,9 +9853,8 @@ export class CompanyProjectsService {
       });
     }
 
-    const baseUrl = process.env.API_BASE_URL || 'https://comapny-admin.onrender.com';
-    const relativePath = `uploads/companyproject/launchAndTraining/${companyId}/${file.filename}`;
-    const fullUrl = `${baseUrl}/${relativePath}`;
+    const publicUrl = await this.persistUpload(file, `uploads/companyproject/launchAndTraining/${companyId}`);
+    const fullUrl = publicUrl;
 
     const reportDate = launchTrainingReportDate
       ? (() => {
@@ -10022,7 +9863,7 @@ export class CompanyProjectsService {
         })()
       : undefined;
 
-    (project as any).launch_training_document = relativePath;
+    (project as any).launch_training_document = publicUrl;
     if (reportDate) (project as any).launch_training_report_date = reportDate;
     await project.save();
 
@@ -10081,9 +9922,11 @@ export class CompanyProjectsService {
       });
     }
 
-    const baseUrl = process.env.API_BASE_URL || 'https://comapny-admin.onrender.com';
-    const relativePath = `uploads/companyproject/launchAndTraining/${resolved.projectId}/${file.filename}`;
-    const fullUrl = `${baseUrl}/${relativePath}`;
+    const publicUrl = await this.persistUpload(
+      file,
+      `uploads/companyproject/launchAndTraining/${resolved.projectId}`,
+    );
+    const fullUrl = publicUrl;
     const reportDate = launchTrainingReportDate
       ? (() => {
           const d = new Date(launchTrainingReportDate);
@@ -10091,7 +9934,7 @@ export class CompanyProjectsService {
         })()
       : undefined;
 
-    (project as any).launch_training_document = relativePath;
+    (project as any).launch_training_document = publicUrl;
     if (reportDate) (project as any).launch_training_report_date = reportDate;
     await project.save();
 
@@ -10790,8 +10633,10 @@ export class CompanyProjectsService {
     let contractDocumentPath = null;
     if (contractDocument) {
       const baseUrl = process.env.API_BASE_URL || 'https://comapny-admin.onrender.com';
-      const relativePath = `uploads/facilitator-contracts/${projectId}/${contractDocument.filename}`;
-      contractDocumentPath = `${baseUrl}/${relativePath}`;
+      contractDocumentPath = await this.persistUpload(
+        contractDocument,
+        `uploads/facilitator-contracts/${projectId}`,
+      );
       console.log('[Assign Facilitator] Contract document saved:', contractDocumentPath);
     }
 
@@ -13050,14 +12895,10 @@ export class CompanyProjectsService {
     if (!project) {
       throw new NotFoundException({ status: 'error', message: 'Project not found' });
     }
-    let buffer: Buffer;
-    if ((file as any).buffer) {
-      buffer = (file as any).buffer;
-    } else if ((file as any).path && fs.existsSync((file as any).path)) {
-      buffer = fs.readFileSync((file as any).path);
-    } else {
-      throw new BadRequestException({ status: 'error', message: 'No file buffer or path' });
+    if (!file.buffer?.length) {
+      throw new BadRequestException({ status: 'error', message: 'No file buffer' });
     }
+    const buffer = file.buffer;
     let Workbook: any;
     try {
       const exceljs = await import('exceljs');

@@ -5,13 +5,21 @@ import { Facilitator, FacilitatorDocument } from '../schemas/facilitator.schema'
 import {
   FACILITATOR_PROFILE_DOCUMENT_KEYS,
 } from './facilitator-profile-document-keys';
+import { S3Service } from '../../s3/s3.service';
+import { persistMulterFile } from '../../common/stored-file.util';
 
 @Injectable()
 export class FacilitatorProfileService {
   constructor(
     @InjectModel(Facilitator.name)
     private readonly facilitatorModel: Model<FacilitatorDocument>,
+    private readonly s3Service: S3Service,
   ) {}
+
+  private async uploadField(field: string, files?: Record<string, Express.Multer.File[]>): Promise<string | undefined> {
+    const f = files?.[field]?.[0];
+    return f ? (await persistMulterFile(this.s3Service, f, 'uploads/facilitators')).publicUrl : undefined;
+  }
 
   private requireNonEmpty(value: unknown): boolean {
     return String(value ?? '').trim().length > 0;
@@ -128,8 +136,6 @@ export class FacilitatorProfileService {
     const facilitator = await this.facilitatorModel.findById(facilitatorId);
     if (!facilitator) throw new NotFoundException({ status: 'error', message: 'Facilitator not found' });
 
-    const filePath = (field: string) => (files?.[field]?.[0] ? `uploads/facilitators/${files[field][0].filename}` : undefined);
-
     this.assertRequiredProfileFields(body, facilitator, files);
 
     facilitator.consultant_id = String(body?.consultant_id ?? facilitator.consultant_id ?? '').trim();
@@ -171,21 +177,24 @@ export class FacilitatorProfileService {
         ? this.toBool(body.declaration_accepted)
         : (facilitator as any).declaration_accepted;
 
-    facilitator.profile_image = filePath('profile_image') ?? facilitator.profile_image;
+    facilitator.profile_image =
+      (await this.uploadField('profile_image', files)) ?? facilitator.profile_image;
     facilitator.vendor_registration_form =
-      filePath('vendor_registration_form') ?? facilitator.vendor_registration_form;
+      (await this.uploadField('vendor_registration_form', files)) ?? facilitator.vendor_registration_form;
 
     // Keep old + new aliases supported.
     (facilitator as any).brief_profile_individual =
-      filePath('brief_profile_individual') ?? (facilitator as any).brief_profile_individual;
+      (await this.uploadField('brief_profile_individual', files)) ??
+      (facilitator as any).brief_profile_individual;
     facilitator.biodata =
-      filePath('biodata') ??
-      filePath('brief_profile_individual') ??
+      (await this.uploadField('biodata', files)) ??
+      (await this.uploadField('brief_profile_individual', files)) ??
       facilitator.biodata;
     (facilitator as any).brief_profile_organization =
-      filePath('brief_profile_organization') ?? (facilitator as any).brief_profile_organization;
+      (await this.uploadField('brief_profile_organization', files)) ??
+      (facilitator as any).brief_profile_organization;
     (facilitator as any).projects_handled =
-      filePath('projects_handled') ?? (facilitator as any).projects_handled;
+      (await this.uploadField('projects_handled', files)) ?? (facilitator as any).projects_handled;
 
     const prev = ((facilitator as any).document_approvals || {}) as Record<
       string,

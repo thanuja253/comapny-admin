@@ -13,6 +13,8 @@ import { Industry, IndustryDocument } from '../../company/schemas/industry.schem
 import { CreateAssessorDto } from './dto/create-assessor.dto';
 import { UpdateAssessorDto } from './dto/update-assessor.dto';
 import { passwordGeneration } from '../../helpers/password.helper';
+import { S3Service } from '../../s3/s3.service';
+import { persistMulterFile, resolvePublicUrl } from '../../common/stored-file.util';
 
 function escapeRegex(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -24,6 +26,7 @@ export class AssessorManagementService {
     @InjectModel(Assessor.name) private readonly assessorModel: Model<AssessorDocument>,
     @InjectModel(State.name) private readonly stateModel: Model<StateDocument>,
     @InjectModel(Industry.name) private readonly industryModel: Model<IndustryDocument>,
+    private readonly s3Service: S3Service,
   ) {}
 
   private mapAssessor(item: any) {
@@ -36,7 +39,7 @@ export class AssessorManagementService {
     const profileUpdatedNum = profileUpdated === '1' ? 1 : 0;
     const withAssetUrl = (value: string | undefined) => {
       if (!value) return '';
-      return String(value).startsWith('/uploads/') ? value : `/uploads/${value}`;
+      return resolvePublicUrl(this.s3Service, value) || String(value);
     };
     return {
       ...item,
@@ -73,7 +76,7 @@ export class AssessorManagementService {
     };
   }
 
-  private applyUploadedFiles(
+  private async applyUploadedFiles(
     payload: Record<string, any>,
     files: Express.Multer.File[] = [],
   ) {
@@ -96,7 +99,8 @@ export class AssessorManagementService {
     for (const f of files) {
       const schemaKey = fieldToSchemaKey[f.fieldname];
       if (!schemaKey) continue;
-      payload[schemaKey] = `assessors/${f.filename}`;
+      const { publicUrl } = await persistMulterFile(this.s3Service, f, 'uploads/assessors');
+      payload[schemaKey] = publicUrl;
     }
   }
 
@@ -609,7 +613,7 @@ export class AssessorManagementService {
     }
 
     const updatePayload = this.buildUpdatePayload(dto);
-    this.applyUploadedFiles(updatePayload, files);
+    await this.applyUploadedFiles(updatePayload, files);
     // Some UIs submit "finalSubmit" flag instead of profile_updated/profileStatus.
     const maybeFinalSubmit =
       (dto as any)?.finalSubmit ??

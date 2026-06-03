@@ -8,7 +8,6 @@ import {
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
-import * as fs from 'fs';
 import type { Readable } from 'stream';
 
 @Injectable()
@@ -61,13 +60,7 @@ export class S3Service {
     file: Express.Multer.File,
     folder = 'uploads',
   ): Promise<string> {
-    let buffer = file.buffer;
-    if (!buffer?.length && file.path && fs.existsSync(file.path)) {
-      buffer = fs.readFileSync(file.path);
-    }
-    if (!buffer?.length) {
-      buffer = Buffer.alloc(0);
-    }
+    const buffer = file.buffer?.length ? file.buffer : Buffer.alloc(0);
     return this.uploadBuffer(buffer, file.originalname, folder, file.mimetype);
   }
 

@@ -21,7 +21,7 @@ import {
   ValidationPipe,
 } from '@nestjs/common';
 import { AnyFilesInterceptor, FileFieldsInterceptor, FileInterceptor } from '@nestjs/platform-express';
-import { diskStorage } from 'multer';
+import { multerMemoryOptions } from '../../common/multer-memory.config';
 import { extname, join } from 'path';
 import * as fs from 'fs';
 import { Request, Response } from 'express';
@@ -148,7 +148,12 @@ export class AdminCompanyFlowController {
     const file = await this.companyProjectsService.getCertificateDocumentDownloadByProjectId(projectId);
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `inline; filename="${file.filename}"`);
-    res.sendFile(file.absolutePath);
+    await this.companyProjectsService.streamStoredDocument(
+      res,
+      file.stored,
+      file.filename,
+      'application/pdf',
+    );
   }
 
   @Get('api/admin/projects/:projectId/assignments')
@@ -244,20 +249,7 @@ export class AdminCompanyFlowController {
   @Post('admin/projects/:projectId/assign-facilitator')
   @UseInterceptors(
     FileInterceptor('contract_document', {
-      storage: diskStorage({
-        destination: (req, file, cb) => {
-          const pid = req.params.projectId;
-          const uploadPath = join(process.cwd(), 'uploads', 'facilitator-contracts', pid);
-          if (!fs.existsSync(uploadPath)) {
-            fs.mkdirSync(uploadPath, { recursive: true });
-          }
-          cb(null, uploadPath);
-        },
-        filename: (req, file, cb) => {
-          const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
-          cb(null, `contract-${uniqueSuffix}${extname(file.originalname)}`);
-        },
-      }),
+      ...multerMemoryOptions,
       fileFilter: (req, file, cb) => {
         if (file.mimetype === 'application/pdf' || file.mimetype.startsWith('image/')) {
           cb(null, true);
@@ -641,19 +633,7 @@ export class AdminCompanyFlowController {
         { name: 'cancelled_cheque', maxCount: 1 },
       ],
       {
-        storage: diskStorage({
-          destination: (req, file, cb) => {
-            const uploadPath = join(process.cwd(), 'uploads', 'assessors');
-            if (!fs.existsSync(uploadPath)) {
-              fs.mkdirSync(uploadPath, { recursive: true });
-            }
-            cb(null, uploadPath);
-          },
-          filename: (req, file, cb) => {
-            const unique = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
-            cb(null, `${file.fieldname}-${unique}${extname(file.originalname)}`);
-          },
-        }),
+        
         fileFilter: (req, file, cb) => {
           if (file.fieldname === 'profile_image') {
             const imageTypes = ['image/png', 'image/jpeg', 'image/jpg'];
@@ -705,19 +685,7 @@ export class AdminCompanyFlowController {
         { name: 'cancelled_cheque', maxCount: 1 },
       ],
       {
-        storage: diskStorage({
-          destination: (req, file, cb) => {
-            const uploadPath = join(process.cwd(), 'uploads', 'assessors');
-            if (!fs.existsSync(uploadPath)) {
-              fs.mkdirSync(uploadPath, { recursive: true });
-            }
-            cb(null, uploadPath);
-          },
-          filename: (req, file, cb) => {
-            const unique = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
-            cb(null, `${file.fieldname}-${unique}${extname(file.originalname)}`);
-          },
-        }),
+        
         fileFilter: (req, file, cb) => {
           if (file.fieldname === 'profile_image') {
             const imageTypes = ['image/png', 'image/jpeg', 'image/jpg'];
@@ -776,19 +744,7 @@ export class AdminCompanyFlowController {
         { name: 'cancelled_cheque', maxCount: 1 },
       ],
       {
-        storage: diskStorage({
-          destination: (req, file, cb) => {
-            const uploadPath = join(process.cwd(), 'uploads', 'assessors');
-            if (!fs.existsSync(uploadPath)) {
-              fs.mkdirSync(uploadPath, { recursive: true });
-            }
-            cb(null, uploadPath);
-          },
-          filename: (req, file, cb) => {
-            const unique = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
-            cb(null, `${file.fieldname}-${unique}${extname(file.originalname)}`);
-          },
-        }),
+        
         limits: { fileSize: 10 * 1024 * 1024 },
       },
     ),
@@ -828,19 +784,7 @@ export class AdminCompanyFlowController {
         { name: 'cancelled_cheque', maxCount: 1 },
       ],
       {
-        storage: diskStorage({
-          destination: (req, file, cb) => {
-            const uploadPath = join(process.cwd(), 'uploads', 'assessors');
-            if (!fs.existsSync(uploadPath)) {
-              fs.mkdirSync(uploadPath, { recursive: true });
-            }
-            cb(null, uploadPath);
-          },
-          filename: (req, file, cb) => {
-            const unique = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
-            cb(null, `${file.fieldname}-${unique}${extname(file.originalname)}`);
-          },
-        }),
+        
         limits: { fileSize: 10 * 1024 * 1024 },
       },
     ),
@@ -879,19 +823,7 @@ export class AdminCompanyFlowController {
         { name: 'cancelled_cheque', maxCount: 1 },
       ],
       {
-        storage: diskStorage({
-          destination: (req, file, cb) => {
-            const uploadPath = join(process.cwd(), 'uploads', 'assessors');
-            if (!fs.existsSync(uploadPath)) {
-              fs.mkdirSync(uploadPath, { recursive: true });
-            }
-            cb(null, uploadPath);
-          },
-          filename: (req, file, cb) => {
-            const unique = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
-            cb(null, `${file.fieldname}-${unique}${extname(file.originalname)}`);
-          },
-        }),
+        
         limits: { fileSize: 10 * 1024 * 1024 },
       },
     ),
@@ -1205,6 +1137,7 @@ export class AdminCompanyFlowController {
   @Post('company/import/ee/:projectid')
   @UseInterceptors(
     FileInterceptor('energy_efficiency', {
+      ...multerMemoryOptions,
       limits: { fileSize: 15 * 1024 * 1024 },
       fileFilter: (_req, file, cb) => {
         const ext = extname(file.originalname || '').toLowerCase();
@@ -1269,20 +1202,7 @@ export class AdminCompanyFlowController {
   @Post('admin/certificate_upload/:projectId')
   @UseInterceptors(
     AnyFilesInterceptor({
-      storage: diskStorage({
-        destination: (req, _file, cb) => {
-          const projectId = req.params.projectId;
-          const uploadPath = join(process.cwd(), 'uploads', 'company_certificate', projectId);
-          if (!fs.existsSync(uploadPath)) {
-            fs.mkdirSync(uploadPath, { recursive: true });
-          }
-          cb(null, uploadPath);
-        },
-        filename: (_req, file, cb) => {
-          const ext = extname(file.originalname) || '.pdf';
-          cb(null, `${Date.now()}${ext}`);
-        },
-      }),
+      
       limits: { fileSize: 10 * 1024 * 1024 },
       fileFilter: (_req, file, cb) => {
         if (file.mimetype === 'application/pdf') cb(null, true);
@@ -1330,20 +1250,7 @@ export class AdminCompanyFlowController {
   @Post('admin/company/feedback_upload/:projectId')
   @UseInterceptors(
     FileInterceptor('feedback_upload', {
-      storage: diskStorage({
-        destination: (req, _file, cb) => {
-          const projectId = req.params.projectId;
-          const uploadPath = join(process.cwd(), 'uploads', 'company_feedback', projectId);
-          if (!fs.existsSync(uploadPath)) {
-            fs.mkdirSync(uploadPath, { recursive: true });
-          }
-          cb(null, uploadPath);
-        },
-        filename: (_req, file, cb) => {
-          const ext = extname(file.originalname) || '.pdf';
-          cb(null, `${Date.now()}${ext}`);
-        },
-      }),
+      ...multerMemoryOptions,
       limits: { fileSize: 10 * 1024 * 1024 },
       fileFilter: (_req, file, cb) => {
         if (file.mimetype === 'application/pdf') cb(null, true);
@@ -1388,20 +1295,7 @@ export class AdminCompanyFlowController {
   @Post('admin/upload_inv/:companyProject')
   @UseInterceptors(
     FileInterceptor('regFeeInvoice', {
-      storage: diskStorage({
-        destination: (req, file, cb) => {
-          const projectId = req.params.companyProject;
-          const uploadPath = join(process.cwd(), 'uploads', 'company', projectId, 'expenses');
-          if (!fs.existsSync(uploadPath)) {
-            fs.mkdirSync(uploadPath, { recursive: true });
-          }
-          cb(null, uploadPath);
-        },
-        filename: (req, file, cb) => {
-          const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
-          cb(null, `expense-${uniqueSuffix}${extname(file.originalname)}`);
-        },
-      }),
+      ...multerMemoryOptions,
       limits: { fileSize: 10 * 1024 * 1024 },
       fileFilter: (req, file, cb) => {
         const isPdf = file.mimetype === 'application/pdf' && extname(file.originalname).toLowerCase() === '.pdf';
@@ -1474,20 +1368,7 @@ export class AdminCompanyFlowController {
   @Patch('admin/upload_inv/:companyProject/:invoiceId')
   @UseInterceptors(
     FileInterceptor('regFeeInvoice', {
-      storage: diskStorage({
-        destination: (req, file, cb) => {
-          const projectId = req.params.companyProject;
-          const uploadPath = join(process.cwd(), 'uploads', 'company', projectId, 'expenses');
-          if (!fs.existsSync(uploadPath)) {
-            fs.mkdirSync(uploadPath, { recursive: true });
-          }
-          cb(null, uploadPath);
-        },
-        filename: (req, file, cb) => {
-          const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
-          cb(null, `expense-${uniqueSuffix}${extname(file.originalname)}`);
-        },
-      }),
+      ...multerMemoryOptions,
       limits: { fileSize: 10 * 1024 * 1024 },
       fileFilter: (req, file, cb) => {
         const isPdf = file.mimetype === 'application/pdf' && extname(file.originalname).toLowerCase() === '.pdf';

@@ -15,7 +15,7 @@ import {
   ValidationPipe,
 } from '@nestjs/common';
 import { FileFieldsInterceptor } from '@nestjs/platform-express';
-import { diskStorage } from 'multer';
+import { multerMemoryOptions } from '../../common/multer-memory.config';
 import { extname } from 'path';
 import type { Response } from 'express';
 import { GroupManagementService } from './group-management.service';
@@ -71,13 +71,7 @@ export class GroupManagementController {
         { name: 'document', maxCount: 1 },
       ],
       {
-        storage: diskStorage({
-          destination: 'uploads/groups',
-          filename: (_req, file, cb) => {
-            const ext = extname(file.originalname || '') || '.bin';
-            cb(null, `${Date.now()}-${normalizeName(file.fieldname)}${ext}`);
-          },
-        }),
+        ...multerMemoryOptions,
         fileFilter: validateChecklistFile,
       },
     ),
@@ -97,8 +91,7 @@ export class GroupManagementController {
     if (!file) {
       throw new BadRequestException('checklist_add_doc is required');
     }
-    const sampleDocumentPath = file ? `uploads/groups/${file.filename}` : undefined;
-    return this.groupService.createGroup(payload, sampleDocumentPath);
+    return this.groupService.createGroup(payload, file);
   }
 
   @Get('api/admin/group')
@@ -166,13 +159,7 @@ export class GroupManagementController {
         { name: 'document', maxCount: 1 },
       ],
       {
-        storage: diskStorage({
-          destination: 'uploads/groups',
-          filename: (_req, file, cb) => {
-            const ext = extname(file.originalname || '') || '.bin';
-            cb(null, `${Date.now()}-${normalizeName(file.fieldname)}${ext}`);
-          },
-        }),
+        ...multerMemoryOptions,
         fileFilter: validateChecklistFile,
       },
     ),
@@ -190,8 +177,7 @@ export class GroupManagementController {
       files?.checklist_doc?.[0] ||
       files?.document?.[0] ||
       undefined;
-    const sampleDocumentPath = file ? `uploads/groups/${file.filename}` : undefined;
-    return this.groupService.updateGroup(id, payload, sampleDocumentPath);
+    return this.groupService.updateGroup(id, payload, file);
   }
 }
 

@@ -14,7 +14,7 @@ import {
   ValidationPipe,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
-import { diskStorage } from 'multer';
+import { multerMemoryOptions } from '../../common/multer-memory.config';
 import { join } from 'node:path';
 import * as fs from 'node:fs';
 import { CompanyProjectsService } from './company-projects.service';
@@ -145,33 +145,7 @@ export class FacilitatorLaunchTrainingController {
   @UseGuards(FacilitatorJwtAuthGuard, FacilitatorAccountStatusGuard)
   @UseInterceptors(
     FileInterceptor('launch_upload', {
-      storage: diskStorage({
-        destination: (req, file, cb) => {
-          const pid = (req as any).params?.projectId || '_';
-          const uploadPath = join(
-            process.cwd(),
-            'uploads',
-            'companyproject',
-            'launchAndTraining',
-            pid,
-          );
-          if (!fs.existsSync(uploadPath)) {
-            fs.mkdirSync(uploadPath, { recursive: true });
-          }
-          cb(null, uploadPath);
-        },
-        filename: (req, file, cb) => {
-          const now = new Date();
-          const ymdhis =
-            now.getFullYear() +
-            String(now.getMonth() + 1).padStart(2, '0') +
-            String(now.getDate()).padStart(2, '0') +
-            String(now.getHours()).padStart(2, '0') +
-            String(now.getMinutes()).padStart(2, '0') +
-            String(now.getSeconds()).padStart(2, '0');
-          cb(null, `${ymdhis}_${file.originalname}`);
-        },
-      }),
+      ...multerMemoryOptions,
       limits: { fileSize: 10 * 1024 * 1024 },
       fileFilter: (req, file, cb) => {
         if (file.mimetype === 'application/pdf') cb(null, true);

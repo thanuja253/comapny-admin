@@ -13,7 +13,7 @@ import {
   ValidationPipe,
 } from '@nestjs/common';
 import { FileFieldsInterceptor, FileInterceptor } from '@nestjs/platform-express';
-import { diskStorage } from 'multer';
+import { multerMemoryOptions } from '../../common/multer-memory.config';
 import { extname, join } from 'node:path';
 import * as fs from 'node:fs';
 import { CompanyProjectsService } from './company-projects.service';
@@ -35,18 +35,7 @@ export class FacilitatorFinanceV2Controller {
   @UsePipes(new ValidationPipe({ transform: true, whitelist: true }))
   @UseInterceptors(
     FileInterceptor('invoice_document', {
-      storage: diskStorage({
-        destination: (req, file, cb) => {
-          const projectId = (req as any).params?.projectId || 'unknown';
-          const uploadPath = join(process.cwd(), 'uploads', 'company', projectId, 'finance-v2');
-          if (!fs.existsSync(uploadPath)) fs.mkdirSync(uploadPath, { recursive: true });
-          cb(null, uploadPath);
-        },
-        filename: (req, file, cb) => {
-          const ext = extname(file.originalname);
-          cb(null, `finance-v2-${Date.now()}${ext}`);
-        },
-      }),
+      ...multerMemoryOptions,
       limits: { fileSize: 10 * 1024 * 1024 },
       fileFilter: (req, file, cb) => {
         const allowed = ['application/pdf', 'image/jpeg', 'image/jpg', 'image/png'];
@@ -76,18 +65,7 @@ export class FacilitatorFinanceV2Controller {
   @UsePipes(new ValidationPipe({ transform: true, whitelist: true }))
   @UseInterceptors(
     FileInterceptor('invoice_document', {
-      storage: diskStorage({
-        destination: (req, file, cb) => {
-          const projectId = (req as any).params?.projectId || 'unknown';
-          const uploadPath = join(process.cwd(), 'uploads', 'company', projectId, 'finance-v2');
-          if (!fs.existsSync(uploadPath)) fs.mkdirSync(uploadPath, { recursive: true });
-          cb(null, uploadPath);
-        },
-        filename: (req, file, cb) => {
-          const ext = extname(file.originalname);
-          cb(null, `finance-v2-${Date.now()}${ext}`);
-        },
-      }),
+      ...multerMemoryOptions,
       limits: { fileSize: 10 * 1024 * 1024 },
       fileFilter: (req, file, cb) => {
         const allowed = ['application/pdf', 'image/jpeg', 'image/jpg', 'image/png'];
@@ -132,19 +110,7 @@ export class FacilitatorFinanceV2Controller {
         { name: 'file', maxCount: 1 },
       ],
       {
-        storage: diskStorage({
-          destination: (req, file, cb) => {
-            const projectId = (req as any).params?.projectId || 'unknown';
-            const uploadPath = join(process.cwd(), 'uploads', 'company', projectId, 'finance-v2-payments');
-            if (!fs.existsSync(uploadPath)) fs.mkdirSync(uploadPath, { recursive: true });
-            cb(null, uploadPath);
-          },
-          filename: (req, file, cb) => {
-            const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
-            const ext = extname(file.originalname);
-            cb(null, `finance-v2-payment-${uniqueSuffix}${ext}`);
-          },
-        }),
+        
         limits: { fileSize: 10 * 1024 * 1024 },
         fileFilter: (req, file, cb) => {
           const allowed = ['application/pdf', 'image/jpeg', 'image/jpg', 'image/png'];
@@ -240,18 +206,7 @@ export class FacilitatorFinanceV2Controller {
   @UsePipes(new ValidationPipe({ transform: true, whitelist: true }))
   @UseInterceptors(
     FileInterceptor('invoice_document', {
-      storage: diskStorage({
-        destination: (req, file, cb) => {
-          const resolvedProjectId = (req as any).params?.projectId || 'unknown';
-          const uploadPath = join(process.cwd(), 'uploads', 'company', resolvedProjectId, 'finance-v2');
-          if (!fs.existsSync(uploadPath)) fs.mkdirSync(uploadPath, { recursive: true });
-          cb(null, uploadPath);
-        },
-        filename: (req, file, cb) => {
-          const ext = extname(file.originalname);
-          cb(null, `finance-v2-${Date.now()}${ext}`);
-        },
-      }),
+      ...multerMemoryOptions,
       limits: { fileSize: 10 * 1024 * 1024 },
       fileFilter: (req, file, cb) => {
         const allowed = ['application/pdf', 'image/jpeg', 'image/jpg', 'image/png'];
@@ -282,18 +237,7 @@ export class FacilitatorFinanceV2Controller {
   @UsePipes(new ValidationPipe({ transform: true, whitelist: true }))
   @UseInterceptors(
     FileInterceptor('invoice_document', {
-      storage: diskStorage({
-        destination: (req, file, cb) => {
-          const resolvedProjectId = (req as any).params?.projectId || 'unknown';
-          const uploadPath = join(process.cwd(), 'uploads', 'company', resolvedProjectId, 'finance-v2');
-          if (!fs.existsSync(uploadPath)) fs.mkdirSync(uploadPath, { recursive: true });
-          cb(null, uploadPath);
-        },
-        filename: (req, file, cb) => {
-          const ext = extname(file.originalname);
-          cb(null, `finance-v2-${Date.now()}${ext}`);
-        },
-      }),
+      ...multerMemoryOptions,
       limits: { fileSize: 10 * 1024 * 1024 },
       fileFilter: (req, file, cb) => {
         const allowed = ['application/pdf', 'image/jpeg', 'image/jpg', 'image/png'];
@@ -351,25 +295,7 @@ export class FacilitatorFinanceV2Controller {
         { name: 'file', maxCount: 1 },
       ],
       {
-        storage: diskStorage({
-          destination: (req, file, cb) => {
-            const resolvedProjectId = (req as any).params?.projectId || 'unknown';
-            const uploadPath = join(
-              process.cwd(),
-              'uploads',
-              'company',
-              resolvedProjectId,
-              'finance-v2-payments',
-            );
-            if (!fs.existsSync(uploadPath)) fs.mkdirSync(uploadPath, { recursive: true });
-            cb(null, uploadPath);
-          },
-          filename: (req, file, cb) => {
-            const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
-            const ext = extname(file.originalname);
-            cb(null, `finance-v2-payment-${uniqueSuffix}${ext}`);
-          },
-        }),
+        
         limits: { fileSize: 10 * 1024 * 1024 },
         fileFilter: (req, file, cb) => {
           const allowed = ['application/pdf', 'image/jpeg', 'image/jpg', 'image/png'];
@@ -425,18 +351,7 @@ export class FacilitatorFinanceV2Controller {
   @UsePipes(new ValidationPipe({ transform: true, whitelist: true }))
   @UseInterceptors(
     FileInterceptor('invoice_document', {
-      storage: diskStorage({
-        destination: (req, file, cb) => {
-          const resolvedProjectId = (req as any).params?.projectId || 'unknown';
-          const uploadPath = join(process.cwd(), 'uploads', 'company', resolvedProjectId, 'finance-v2');
-          if (!fs.existsSync(uploadPath)) fs.mkdirSync(uploadPath, { recursive: true });
-          cb(null, uploadPath);
-        },
-        filename: (req, file, cb) => {
-          const ext = extname(file.originalname);
-          cb(null, `finance-v2-${Date.now()}${ext}`);
-        },
-      }),
+      ...multerMemoryOptions,
       limits: { fileSize: 10 * 1024 * 1024 },
       fileFilter: (req, file, cb) => {
         const allowed = ['application/pdf', 'image/jpeg', 'image/jpg', 'image/png'];
@@ -470,18 +385,7 @@ export class FacilitatorFinanceV2Controller {
   @UsePipes(new ValidationPipe({ transform: true, whitelist: true }))
   @UseInterceptors(
     FileInterceptor('invoice_document', {
-      storage: diskStorage({
-        destination: (req, file, cb) => {
-          const resolvedProjectId = (req as any).params?.projectId || 'unknown';
-          const uploadPath = join(process.cwd(), 'uploads', 'company', resolvedProjectId, 'finance-v2');
-          if (!fs.existsSync(uploadPath)) fs.mkdirSync(uploadPath, { recursive: true });
-          cb(null, uploadPath);
-        },
-        filename: (req, file, cb) => {
-          const ext = extname(file.originalname);
-          cb(null, `finance-v2-${Date.now()}${ext}`);
-        },
-      }),
+      ...multerMemoryOptions,
       limits: { fileSize: 10 * 1024 * 1024 },
       fileFilter: (req, file, cb) => {
         const allowed = ['application/pdf', 'image/jpeg', 'image/jpg', 'image/png'];
@@ -559,25 +463,7 @@ export class FacilitatorFinanceV2Controller {
         { name: 'file', maxCount: 1 },
       ],
       {
-        storage: diskStorage({
-          destination: (req, file, cb) => {
-            const resolvedProjectId = (req as any).params?.projectId || 'unknown';
-            const uploadPath = join(
-              process.cwd(),
-              'uploads',
-              'company',
-              resolvedProjectId,
-              'finance-v2-payments',
-            );
-            if (!fs.existsSync(uploadPath)) fs.mkdirSync(uploadPath, { recursive: true });
-            cb(null, uploadPath);
-          },
-          filename: (req, file, cb) => {
-            const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
-            const ext = extname(file.originalname);
-            cb(null, `finance-v2-payment-${uniqueSuffix}${ext}`);
-          },
-        }),
+        
         limits: { fileSize: 10 * 1024 * 1024 },
         fileFilter: (req, file, cb) => {
           const allowed = ['application/pdf', 'image/jpeg', 'image/jpg', 'image/png'];

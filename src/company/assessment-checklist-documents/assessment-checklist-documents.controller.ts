@@ -15,7 +15,7 @@ import {
   ValidationPipe,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
-import { diskStorage } from 'multer';
+import { multerMemoryOptions } from '../../common/multer-memory.config';
 import { extname, join } from 'path';
 import * as fs from 'fs';
 import type { Request } from 'express';
@@ -77,8 +77,7 @@ export class AssessmentChecklistDocumentsController {
     @Query('sector_id') sectorId: string | undefined,
     @Res() res: Response,
   ): Promise<void> {
-    const file = await this.docsService.getSampleChecklistDocumentForProject(projectId, sectorId);
-    res.download(file.absolutePath, file.filename);
+    await this.docsService.streamSampleChecklistDocument(projectId, sectorId, res);
   }
 
   /**
@@ -91,18 +90,7 @@ export class AssessmentChecklistDocumentsController {
   @UseGuards(JwtAuthGuard, AccountStatusGuard)
   @UseInterceptors(
     FileInterceptor('document', {
-      storage: diskStorage({
-        destination: (req, _file, cb) => {
-          const pid = (req as any).params.projectId;
-          const uploadPath = join(process.cwd(), 'uploads', 'companyproject', 'assessmentChecklist', pid);
-          if (!fs.existsSync(uploadPath)) fs.mkdirSync(uploadPath, { recursive: true });
-          cb(null, uploadPath);
-        },
-        filename: (_req, file, cb) => {
-          const unique = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
-          cb(null, `checklist-${unique}${extname(file.originalname)}`);
-        },
-      }),
+      ...multerMemoryOptions,
       limits: { fileSize: 10 * 1024 * 1024 },
       fileFilter: (_req, file, cb) => {
         const allowed = [
@@ -137,7 +125,7 @@ export class AssessmentChecklistDocumentsController {
       sectorId,
       criteriaId,
       title,
-      documentPath: `uploads/companyproject/assessmentChecklist/${projectId}/${file.filename}`,
+      file,
       uploadedByRole: 'COMPANY',
       uploadedById: req.user.userId,
     });
@@ -147,18 +135,7 @@ export class AssessmentChecklistDocumentsController {
   @UseGuards(JwtAuthGuard, AccountStatusGuard)
   @UseInterceptors(
     FileInterceptor('document', {
-      storage: diskStorage({
-        destination: (req, _file, cb) => {
-          const pid = (req as any).params.projectId;
-          const uploadPath = join(process.cwd(), 'uploads', 'companyproject', 'assessmentChecklist', pid);
-          if (!fs.existsSync(uploadPath)) fs.mkdirSync(uploadPath, { recursive: true });
-          cb(null, uploadPath);
-        },
-        filename: (_req, file, cb) => {
-          const unique = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
-          cb(null, `checklist-${unique}${extname(file.originalname)}`);
-        },
-      }),
+      ...multerMemoryOptions,
       limits: { fileSize: 10 * 1024 * 1024 },
       fileFilter: (_req, file, cb) => {
         const allowed = [
@@ -193,7 +170,7 @@ export class AssessmentChecklistDocumentsController {
       sectorId,
       criteriaId,
       title,
-      documentPath: `uploads/companyproject/assessmentChecklist/${projectId}/${file.filename}`,
+      file,
       uploadedByRole: 'COMPANY',
       uploadedById: req.user.userId,
     });
